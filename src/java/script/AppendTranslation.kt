@@ -3,7 +3,7 @@ package script
 import java.io.File
 
 const val translationFilePath = "E:\\work\\scanner\\1.1.0.0\\QR二维码翻译 V1.1.0.0\\QR二维码翻译 V1.1.0.0"
-const val targetProjectResFilePath = "E:\\tem\\res"
+const val targetProjectResFilePath = "E:\\code\\first\\app\\src\\main\\res"
 const val endFlag = "</resources>"
 
 //翻译文本添加到文件中
@@ -16,8 +16,14 @@ fun main() {
     valuesFiles?.forEach{ valuesFile->
         languageFileMap.toList().forEach { pair->
             if(valuesFile.name.contains(pair.first)){
-                val needAddString = pair.second.bufferedReader().readLines().map { string->
-                    "    "+string
+                val needAddString = pair.second.bufferedReader(Charsets.UTF_8).use { reader ->
+                    // 手动处理BOM
+                    val firstLine = reader.readLine()?.removePrefix("\uFEFF") ?: ""
+                    val remainingLines = reader.readLines()
+
+                    listOf(firstLine) + remainingLines
+                }.map { string ->
+                    "    $string" // 添加缩进
                 }
                 val stringFile = valuesFile.listFiles()!!.first()
                 insertLinesBeforeLastTag(stringFile,needAddString)
