@@ -2,8 +2,8 @@ package script
 
 import java.io.File
 
-const val translationFilePath = "E:\\work\\scanner\\1.1.0.0\\QR二维码翻译 V1.1.0.0\\QR二维码翻译 V1.1.0.0"
-const val targetProjectResFilePath = "E:\\code\\first\\app\\src\\main\\res"
+const val translationFilePath = "E:\\work\\scanner\\1.2.0.0\\QR二维码翻译 V1.2.0.0\\QR二维码翻译 V1.2.0.0"
+const val targetProjectResFilePath = "E:\\tem\\res"
 const val endFlag = "</resources>"
 
 //翻译文本添加到文件中
@@ -23,7 +23,15 @@ fun main() {
 
                     listOf(firstLine) + remainingLines
                 }.map { string ->
-                    "    $string" // 添加缩进
+                    //移除特殊空格
+                    var handleString = string.replace("[\u00A0\u200B]".toRegex(), "")
+                    //添加转义字符
+                    handleString = addBackslashBeforeSingleQuote(handleString)
+                    // & 替换为 &amp;
+                    handleString = replaceAnd(handleString)
+
+                    "    ${handleString}"
+//                    "    $string" // 添加缩进
                 }
                 val stringFile = valuesFile.listFiles()!!.first()
                 insertLinesBeforeLastTag(stringFile,needAddString)
@@ -34,7 +42,37 @@ fun main() {
 
 }
 
-fun insertLinesBeforeLastTag(file: File, newLines: List<String>) {
+private fun replaceAnd(input: String): String {
+    val result = StringBuilder()
+    for (i in input.indices) {
+        val currentChar = input[i]
+        if (currentChar == '&') {
+            if (i + 1 < input.length && input[i + 1] != 'a') {
+                result.append("&amp;")
+                continue
+            }
+        }
+        result.append(currentChar)
+    }
+    return result.toString()
+}
+
+private fun addBackslashBeforeSingleQuote(input: String): String {
+    val result = StringBuilder()
+    for (i in input.indices) {
+        val currentChar = input[i]
+        if (currentChar == '\'') {
+            // 检查前一个字符是否是反斜杠
+            if (i == 0 || input[i - 1] != '\\') {
+                result.append('\\')
+            }
+        }
+        result.append(currentChar)
+    }
+    return result.toString()
+}
+
+private fun insertLinesBeforeLastTag(file: File, newLines: List<String>) {
     val lines = file.readLines().toMutableList()
 
     when {
