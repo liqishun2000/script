@@ -2,18 +2,7 @@ package script.android
 
 import java.io.File
 
-private const val targetProject: String = "E:\\code\\first\\app\\src\\main"
-private val prefix = listOf(
-    "t_" to "new_",
-    "text_" to "new_",
-)
-/**
- *
- * v1.0.0.1
- * */
-fun main() {
-    val allFiles = getAllFiles(targetProject)
-
+fun replaceStringName(allFiles:ProjectBean,stringPrefix:List<Pair<String,String>>) {
     val valuesDirectory = allFiles.resFiles.valuesFiles.find { it.endsWith("values") }
         ?: throw Exception("can't find values directory")
 
@@ -27,7 +16,7 @@ fun main() {
         if(trimIndent.startsWith("<string")){
             val name = extractNameAttribute(trimIndent) ?: ""
 
-            prefix.forEach { pair->
+            stringPrefix.forEach { pair->
                 if(name.startsWith(pair.first)){
                     val drop = name.drop(pair.first.length)
                     val newName = pair.second+drop
@@ -41,7 +30,7 @@ fun main() {
 
 }
 
-fun replaceAllStringName(bean:ProjectBean,map:Map<String,String>){
+private fun replaceAllStringName(bean:ProjectBean,map:Map<String,String>){
     bean.javaFiles.forEach { path->
         val javaFile = File(path)
         val readLines = javaFile.readLines()
