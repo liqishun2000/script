@@ -52,7 +52,6 @@ private fun replaceAllStringName(bean:ProjectBean,map:Map<String,String>){
         File(path).listFiles()?.find { it.name == "strings.xml" }?.let { file->
             val readLines = file.readLines()
             val newLines = readLines.map { line->
-                println(line)
                 var newLine = line
                 map.forEach{ pair->
                     val origin = "name=\"${pair.key}"
@@ -67,6 +66,23 @@ private fun replaceAllStringName(bean:ProjectBean,map:Map<String,String>){
         }
     }
 
+    bean.resFiles.layoutFiles.forEach { path->
+        File(path).listFiles()?.forEach { file->
+            val readLines = file.readLines()
+            val newLines = readLines.map { line->
+                var newLine = line
+                map.forEach{ pair->
+                    val origin = "@string/${pair.key}"
+                    val target = "@string/${pair.value}"
+                    if(line.contains(origin)){
+                        newLine = line.replace(origin,target)
+                    }
+                }
+                newLine
+            }
+            file.writeText(newLines.joinToString("\r\n"))
+        }
+    }
 }
 
 private fun extractNameAttribute(xmlString: String): String? {
