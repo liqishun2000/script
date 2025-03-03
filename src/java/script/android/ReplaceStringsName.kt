@@ -9,7 +9,7 @@ private val prefix = listOf(
 )
 /**
  *
- * v1.0.0.0
+ * v1.0.0.1
  * */
 fun main() {
     val allFiles = getAllFiles(targetProject)
@@ -56,7 +56,7 @@ fun replaceAllStringName(bean:ProjectBean,map:Map<String,String>){
             }
             newLine
         }
-        javaFile.writeText(newLines.joinToString("\n"))
+        javaFile.writeText(newLines.joinToString("\r\n"))
     }
 
     bean.resFiles.valuesFiles.forEach { path->
@@ -75,7 +75,7 @@ fun replaceAllStringName(bean:ProjectBean,map:Map<String,String>){
                 println(newLine)
                 newLine
             }
-            file.writeText(newLines.joinToString("\n"))
+            file.writeText(newLines.joinToString("\r\n"))
         }
     }
 
