@@ -5,11 +5,63 @@ import java.io.File
 fun replaceResFileName(allFiles:ProjectBean,resPrefix:List<Pair<String,String>>) {
 
 //    val colorMap:MutableMap<String,String> = getReplaceMap(allFiles.resFiles.colorDirectory,resPrefix)
-//    val layoutMap:MutableMap<String,String> = getReplaceMap(allFiles.resFiles.layoutDirectory,resPrefix)
+    val layoutMap:MutableMap<String,String> = getReplaceMap(allFiles.resFiles.layoutDirectory,resPrefix)
     val drawableMap:MutableMap<String,String> = getReplaceMap(allFiles.resFiles.drawableDirectory,resPrefix)
 
     replaceDrawableName(allFiles,drawableMap)
+    replaceLayoutName(allFiles,layoutMap)
 }
+
+private fun replaceLayoutName(bean:ProjectBean,map:Map<String,String>){
+    bean.javaFiles.forEach { path->
+        val javaFile = File(path)
+        val readLines = javaFile.readLines()
+        val newLines = readLines.map { line->
+            var newLine = line
+            map.forEach{ pair->
+                val binding = pair.key.convertToCamelCase() + "Binding"
+                val targetBinding = pair.value.convertToCamelCase() + "Binding"
+                if(line.contains(binding)){
+                    newLine = line.replace(binding,targetBinding)
+                }
+
+                val origin = "R.layout.${pair.key}"
+                val target = "R.layout.${pair.value}"
+                if(line.contains(origin)){
+                    newLine = line.replace(origin,target)
+                }
+            }
+
+            newLine
+        }
+        javaFile.writeText(newLines.joinToString("\r\n"))
+    }
+
+    bean.resFiles.layoutDirectory.forEach { path->
+        File(path).listFiles()?.forEach { file->
+            val readLines = file.readLines()
+            val newLines = readLines.map { line->
+                var newLine = line
+                map.forEach{ pair->
+                    val origin = "@layout/${pair.key}"
+                    val target = "@layout/${pair.value}"
+                    if(line.contains(origin)){
+                        newLine = line.replace(origin,target)
+                    }
+                }
+                newLine
+            }
+            file.writeText(newLines.joinToString("\r\n"))
+        }
+    }
+}
+
+private fun String.convertToCamelCase(): String {
+    return this.split('_')
+        .filter { it.isNotEmpty() }
+        .joinToString("") { it.replaceFirstChar { char -> char.uppercase() } }
+}
+
 
 private fun replaceDrawableName(bean:ProjectBean,map:Map<String,String>){
     bean.javaFiles.forEach { path->
