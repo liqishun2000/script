@@ -60,7 +60,9 @@ private fun handleResFiles(file: File): ResourceFiles {
     }
     return ResourceFiles(
         layoutDirectory = layoutDirectory,
-        valuesDirectory = valuesDirectory
+        valuesDirectory = valuesDirectory,
+        colorDirectory = colorDirectory,
+        drawableDirectory = drawableDirectory,
     )
 }
 

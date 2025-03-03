@@ -5,6 +5,10 @@ private val stringPrefix = listOf(
     "t_" to "new_",
     "text_" to "new_",
 )
+private val resPrefix = listOf(
+    "t_" to "new_",
+    "text_" to "new_",
+)
 
 /**
  *
@@ -14,4 +18,6 @@ fun main() {
     val allFiles = getAllFiles(targetProject)
 
     replaceStringName(allFiles, stringPrefix)
+
+    replaceResFileName(allFiles, resPrefix)
 }
