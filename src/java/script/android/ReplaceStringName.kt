@@ -61,7 +61,6 @@ private fun replaceAllStringName(bean:ProjectBean,map:Map<String,String>){
                         newLine = line.replace(origin,target)
                     }
                 }
-                println(newLine)
                 newLine
             }
             file.writeText(newLines.joinToString("\r\n"))
