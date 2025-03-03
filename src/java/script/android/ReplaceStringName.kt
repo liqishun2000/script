@@ -3,7 +3,7 @@ package script.android
 import java.io.File
 
 fun replaceStringName(allFiles:ProjectBean,stringPrefix:List<Pair<String,String>>) {
-    val valuesDirectory = allFiles.resFiles.valuesFiles.find { it.endsWith("values") }
+    val valuesDirectory = allFiles.resFiles.valuesDirectory.find { it.endsWith("values") }
         ?: throw Exception("can't find values directory")
 
     val stringFile = File(valuesDirectory).listFiles()?.find { it.name == "strings.xml" } ?:
@@ -48,7 +48,7 @@ private fun replaceAllStringName(bean:ProjectBean,map:Map<String,String>){
         javaFile.writeText(newLines.joinToString("\r\n"))
     }
 
-    bean.resFiles.valuesFiles.forEach { path->
+    bean.resFiles.valuesDirectory.forEach { path->
         File(path).listFiles()?.find { it.name == "strings.xml" }?.let { file->
             val readLines = file.readLines()
             val newLines = readLines.map { line->
@@ -66,7 +66,7 @@ private fun replaceAllStringName(bean:ProjectBean,map:Map<String,String>){
         }
     }
 
-    bean.resFiles.layoutFiles.forEach { path->
+    bean.resFiles.layoutDirectory.forEach { path->
         File(path).listFiles()?.forEach { file->
             val readLines = file.readLines()
             val newLines = readLines.map { line->

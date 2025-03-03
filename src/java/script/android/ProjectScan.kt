@@ -8,11 +8,10 @@ data class ProjectBean(
 )
 
 data class ResourceFiles(
-    val valuesFiles: List<String> = listOf(),
-    val layoutFiles: List<String> = listOf(),
-    val pictureFiles: List<String> = listOf(),
-    val colorFiles: List<String> = listOf(),
-    val drawableFiles: List<String> = listOf(),
+    val colorDirectory: List<String> = listOf(),
+    val drawableDirectory: List<String> = listOf(),
+    val layoutDirectory: List<String> = listOf(),
+    val valuesDirectory: List<String> = listOf(),
 )
 
 fun getAllFiles(mainPath: String): ProjectBean {
@@ -38,22 +37,30 @@ fun getAllFiles(mainPath: String): ProjectBean {
 }
 
 private fun handleResFiles(file: File): ResourceFiles {
-    val layoutFiles: MutableList<String> = mutableListOf()
-    val valuesFiles: MutableList<String> = mutableListOf()
+    val layoutDirectory: MutableList<String> = mutableListOf()
+    val valuesDirectory: MutableList<String> = mutableListOf()
+    val colorDirectory:MutableList<String> = mutableListOf()
+    val drawableDirectory:MutableList<String> = mutableListOf()
     file.listFiles()?.forEach {
         when {
             it.name == "layout" -> {
-                layoutFiles.add(it.absolutePath)
+                layoutDirectory.add(it.absolutePath)
             }
 
             it.name.contains("values") -> {
-                valuesFiles.add(it.absolutePath)
+                valuesDirectory.add(it.absolutePath)
+            }
+            it.name == "color"->{
+                colorDirectory.add(it.absolutePath)
+            }
+            it.name.contains("drawable")->{
+                drawableDirectory.add(it.absolutePath)
             }
         }
     }
     return ResourceFiles(
-        layoutFiles = layoutFiles,
-        valuesFiles = valuesFiles
+        layoutDirectory = layoutDirectory,
+        valuesDirectory = valuesDirectory
     )
 }
 
