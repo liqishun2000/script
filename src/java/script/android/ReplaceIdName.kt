@@ -3,6 +3,8 @@ package script.android
 import java.io.File
 
 fun replaceIdName(allFiles:ProjectBean,stringPrefix:List<Pair<String,String>>,bindingNames:List<String>) {
+    println("replace id name...")
+
     val isAddPrefix = stringPrefix.size == 1 && stringPrefix.first().first == ""
 
     val map:MutableMap<String,String> = mutableMapOf()
@@ -63,6 +65,7 @@ fun replaceIdName(allFiles:ProjectBean,stringPrefix:List<Pair<String,String>>,bi
 
     replaceAllIdName(allFiles,map,bindingNames,includeList)
 
+    println("replace id name over")
 }
 
 private fun isInclude(lines:List<String>,index:Int):Boolean{

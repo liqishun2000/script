@@ -3,6 +3,7 @@ package script.android
 import java.io.File
 
 fun replaceResFileName(allFiles:ProjectBean,resPrefix:List<Pair<String,String>>) {
+    println("replace res file name...")
 
     val colorMap:MutableMap<String,String> = getReplaceMap(allFiles.resFiles.colorDirectory,resPrefix)
     val layoutMap:MutableMap<String,String> = getReplaceMap(allFiles.resFiles.layoutDirectory,resPrefix)
@@ -11,6 +12,8 @@ fun replaceResFileName(allFiles:ProjectBean,resPrefix:List<Pair<String,String>>)
     replaceColorName(allFiles,colorMap)
     replaceDrawableName(allFiles,drawableMap)
     replaceLayoutName(allFiles,layoutMap)
+
+    println("replace res file over")
 }
 
 private fun replaceColorName(bean:ProjectBean,map:Map<String,String>){
@@ -22,8 +25,8 @@ private fun replaceColorName(bean:ProjectBean,map:Map<String,String>){
             map.forEach{ pair->
                 val origin = "R.color.${pair.key}"
                 val target = "R.color.${pair.value}"
-                if(line.contains(origin)){
-                    newLine = line.replace(origin,target)
+                if(newLine.contains(origin)){
+                    newLine = newLine.replace(origin,target)
                 }
             }
             newLine
@@ -40,8 +43,8 @@ private fun replaceColorName(bean:ProjectBean,map:Map<String,String>){
                     map.forEach{ pair->
                         val origin = "@color/${pair.key}"
                         val target = "@color/${pair.value}"
-                        if(line.contains(origin)){
-                            newLine = line.replace(origin,target)
+                        if(newLine.contains(origin)){
+                            newLine = newLine.replace(origin,target)
                         }
                     }
                     newLine
@@ -59,8 +62,8 @@ private fun replaceColorName(bean:ProjectBean,map:Map<String,String>){
                 map.forEach{ pair->
                     val origin = "@color/${pair.key}"
                     val target = "@color/${pair.value}"
-                    if(line.contains(origin)){
-                        newLine = line.replace(origin,target)
+                    if(newLine.contains(origin)){
+                        newLine = newLine.replace(origin,target)
                     }
                 }
                 newLine
@@ -79,8 +82,8 @@ private fun replaceLayoutName(bean:ProjectBean,map:Map<String,String>){
             map.forEach{ pair->
                 val binding = pair.key.convertToCamelCase() + "Binding"
                 val targetBinding = pair.value.convertToCamelCase() + "Binding"
-                if(line.contains(binding)){
-                    newLine = line.replace(binding,targetBinding)
+                if(newLine.contains(binding)){
+                    newLine = newLine.replace(binding,targetBinding)
                 }
 
                 val origin = "R.layout.${pair.key}"
@@ -103,8 +106,8 @@ private fun replaceLayoutName(bean:ProjectBean,map:Map<String,String>){
                 map.forEach{ pair->
                     val origin = "@layout/${pair.key}"
                     val target = "@layout/${pair.value}"
-                    if(line.contains(origin)){
-                        newLine = line.replace(origin,target)
+                    if(newLine.contains(origin)){
+                        newLine = newLine.replace(origin,target)
                     }
                 }
                 newLine
@@ -130,8 +133,8 @@ private fun replaceDrawableName(bean:ProjectBean,map:Map<String,String>){
             map.forEach{ pair->
                 val origin = "R.drawable.${pair.key}"
                 val target = "R.drawable.${pair.value}"
-                if(line.contains(origin)){
-                    newLine = line.replace(origin,target)
+                if(newLine.contains(origin)){
+                    newLine = newLine.replace(origin,target)
                 }
             }
             newLine
@@ -139,7 +142,32 @@ private fun replaceDrawableName(bean:ProjectBean,map:Map<String,String>){
         javaFile.writeText(newLines.joinToString("\r\n"))
     }
 
-    bean.resFiles.layoutDirectory.forEach { path->
+    handleResDrawable(bean.resFiles.layoutDirectory,map)
+    handleResDrawable(bean.resFiles.valuesDirectory,map)
+
+    bean.resFiles.drawableDirectory.forEach { path->
+        File(path).listFiles()?.forEach { file->
+            if(file.name.endsWith(".xml")){
+                val readLines = file.readLines()
+                val newLines = readLines.map { line->
+                    var newLine = line
+                    map.forEach{ pair->
+                        val origin = "@drawable/${pair.key}"
+                        val target = "@drawable/${pair.value}"
+                        if(newLine.contains(origin)){
+                            newLine = newLine.replace(origin,target)
+                        }
+                    }
+                    newLine
+                }
+                file.writeText(newLines.joinToString("\r\n"))
+            }
+        }
+    }
+}
+
+private fun handleResDrawable(directory:List<String>,map:Map<String,String>){
+    directory.forEach { path->
         File(path).listFiles()?.forEach { file->
             val readLines = file.readLines()
             val newLines = readLines.map { line->
@@ -147,8 +175,8 @@ private fun replaceDrawableName(bean:ProjectBean,map:Map<String,String>){
                 map.forEach{ pair->
                     val origin = "@drawable/${pair.key}"
                     val target = "@drawable/${pair.value}"
-                    if(line.contains(origin)){
-                        newLine = line.replace(origin,target)
+                    if(newLine.contains(origin)){
+                        newLine = newLine.replace(origin,target)
                     }
                 }
                 newLine

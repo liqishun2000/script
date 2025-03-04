@@ -24,6 +24,7 @@ private val bindingNameList = listOf(
  * v1.0.0.1
  * */
 fun main() {
+    println("start handle...")
     val allFiles = getAllFiles(targetProject)
 
     replaceStringName(allFiles, stringPrefix)
@@ -31,4 +32,6 @@ fun main() {
     replaceResFileName(allFiles, resPrefix)
 
     replaceIdName(allFiles, idPrefix, bindingNameList)
+
+    println("handle over")
 }

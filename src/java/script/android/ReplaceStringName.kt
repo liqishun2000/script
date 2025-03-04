@@ -3,6 +3,8 @@ package script.android
 import java.io.File
 
 fun replaceStringName(allFiles:ProjectBean,stringPrefix:List<Pair<String,String>>) {
+    println("replace string name...")
+
     val valuesDirectory = allFiles.resFiles.valuesDirectory.find { it.endsWith("values") }
         ?: throw Exception("can't find values directory")
 
@@ -28,6 +30,7 @@ fun replaceStringName(allFiles:ProjectBean,stringPrefix:List<Pair<String,String>
 
     replaceAllStringName(allFiles,map)
 
+    println("replace string name over")
 }
 
 private fun replaceAllStringName(bean:ProjectBean,map:Map<String,String>){
@@ -39,8 +42,8 @@ private fun replaceAllStringName(bean:ProjectBean,map:Map<String,String>){
             map.forEach{ pair->
                 val origin = "R.string.${pair.key}"
                 val target = "R.string.${pair.value}"
-                if(line.contains(origin)){
-                    newLine = line.replace(origin,target)
+                if(newLine.contains(origin)){
+                    newLine = newLine.replace(origin,target)
                 }
             }
             newLine
@@ -56,8 +59,8 @@ private fun replaceAllStringName(bean:ProjectBean,map:Map<String,String>){
                 map.forEach{ pair->
                     val origin = "name=\"${pair.key}"
                     val target = "name=\"${pair.value}"
-                    if(line.contains(origin)){
-                        newLine = line.replace(origin,target)
+                    if(newLine.contains(origin)){
+                        newLine = newLine.replace(origin,target)
                     }
                 }
                 newLine
@@ -74,8 +77,8 @@ private fun replaceAllStringName(bean:ProjectBean,map:Map<String,String>){
                 map.forEach{ pair->
                     val origin = "@string/${pair.key}"
                     val target = "@string/${pair.value}"
-                    if(line.contains(origin)){
-                        newLine = line.replace(origin,target)
+                    if(newLine.contains(origin)){
+                        newLine = newLine.replace(origin,target)
                     }
                 }
                 newLine
