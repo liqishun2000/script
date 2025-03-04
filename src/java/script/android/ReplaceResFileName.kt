@@ -82,7 +82,7 @@ private fun replaceLayoutName(bean:ProjectBean,map:Map<String,String>){
             map.forEach{ pair->
                 val binding = pair.key.convertToCamelCase() + "Binding"
                 val targetBinding = pair.value.convertToCamelCase() + "Binding"
-                if(newLine.contains(binding)){
+                if(newLine.containsExactMatch(binding)){
                     newLine = newLine.replace(binding,targetBinding)
                 }
 

@@ -35,3 +35,12 @@ fun main() {
 
     println("handle over")
 }
+
+fun String.containsExactMatch(target: String): Boolean {
+    // 转义目标字符串中的特殊字符（如 .、$ 等）
+    val escapedTarget = Regex.escape(target)
+    // 构建正则表达式，使用单词边界确保精确匹配
+    val regex = Regex("\\b$escapedTarget\\b")
+    // 检查是否存在匹配项
+    return regex.containsMatchIn(this)
+}
