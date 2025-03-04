@@ -10,6 +10,15 @@ private val resPrefix = listOf(
     "text_" to "new_",
 )
 
+//first为null size为1 则为添加前缀 替换前缀id格式为头分法
+private val idPrefix = listOf(
+    "" to "new",
+)
+//binding字段名
+private val bindingNameList = listOf(
+    "binding"
+)
+
 /**
  *
  * v1.0.0.1
@@ -20,4 +29,6 @@ fun main() {
     replaceStringName(allFiles, stringPrefix)
 
     replaceResFileName(allFiles, resPrefix)
+
+    replaceIdName(allFiles, idPrefix, bindingNameList)
 }

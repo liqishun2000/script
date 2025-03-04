@@ -85,8 +85,8 @@ private fun replaceLayoutName(bean:ProjectBean,map:Map<String,String>){
 
                 val origin = "R.layout.${pair.key}"
                 val target = "R.layout.${pair.value}"
-                if(line.contains(origin)){
-                    newLine = line.replace(origin,target)
+                if(newLine.contains(origin)){
+                    newLine = newLine.replace(origin,target)
                 }
             }
 
