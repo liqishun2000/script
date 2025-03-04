@@ -20,8 +20,8 @@ private val bindingNameList = listOf(
 )
 
 /**
- *
- * v1.0.0.1
+ * 用于替换string资源名称，res目录下文件名，layout中的id名称
+ * v1.1.0.0
  * */
 fun main() {
     println("start handle...")
