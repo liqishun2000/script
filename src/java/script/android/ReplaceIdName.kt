@@ -71,7 +71,7 @@ fun replaceIdName(allFiles:ProjectBean,stringPrefix:List<Pair<String,String>>,bi
 private fun isInclude(lines:List<String>,index:Int):Boolean{
     var lastIndex = index - 1
     while (lastIndex in lines.indices) {
-        val lastLine = lines[lastIndex]
+        val lastLine = lines[lastIndex].trimIndent()
         if (lastLine.startsWith("<")) {
             // 判断是否是include标签
             return lastLine.contains("include")
