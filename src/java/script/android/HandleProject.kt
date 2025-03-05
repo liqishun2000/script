@@ -19,6 +19,13 @@ private val bindingNameList = listOf(
     "binding"
 )
 
+private val encodeInfo = listOf(
+    //原来的appId appKey
+    "" to "",
+    //新的appId appKey
+    "" to "",
+)
+
 /**
  * 用于替换string资源名称，res目录下文件名，layout中的id名称
  * v1.1.0.0
@@ -33,14 +40,6 @@ fun main() {
 
     replaceIdName(allFiles, idPrefix, bindingNameList)
 
+//    replaceEncodeString(allFiles, encodeInfo)
     println("handle over")
-}
-
-fun String.containsExactMatch(target: String): Boolean {
-    // 转义目标字符串中的特殊字符（如 .、$ 等）
-    val escapedTarget = Regex.escape(target)
-    // 构建正则表达式，使用单词边界确保精确匹配
-    val regex = Regex("\\b$escapedTarget\\b")
-    // 检查是否存在匹配项
-    return regex.containsMatchIn(this)
 }
