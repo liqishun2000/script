@@ -1,8 +1,8 @@
-package script.android
+package script.android.replaceInfo
 
 import java.io.File
 
-fun replaceEncodeString(allFiles:ProjectBean,encodeInfo:List<Pair<String,String>>){
+fun replaceEncodeString(allFiles: ProjectBean, encodeInfo:List<Pair<String,String>>){
     println("replace encode string...")
 
     val originKey = getKey(encodeInfo[0])

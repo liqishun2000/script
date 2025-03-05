@@ -1,8 +1,8 @@
-package script.android
+package script.android.replaceInfo
 
 import java.io.File
 
-fun replaceResFileName(allFiles:ProjectBean,resPrefix:List<Pair<String,String>>) {
+fun replaceResFileName(allFiles: ProjectBean, resPrefix:List<Pair<String,String>>) {
     println("replace res file name...")
 
     val colorMap:MutableMap<String,String> = getReplaceMap(allFiles.resFiles.colorDirectory,resPrefix)
@@ -16,7 +16,7 @@ fun replaceResFileName(allFiles:ProjectBean,resPrefix:List<Pair<String,String>>)
     println("replace res file over")
 }
 
-private fun replaceColorName(bean:ProjectBean,map:Map<String,String>){
+private fun replaceColorName(bean: ProjectBean, map:Map<String,String>){
     bean.javaFiles.forEach { path->
         val javaFile = File(path)
         val readLines = javaFile.readLines()
@@ -73,7 +73,7 @@ private fun replaceColorName(bean:ProjectBean,map:Map<String,String>){
     }
 }
 
-private fun replaceLayoutName(bean:ProjectBean,map:Map<String,String>){
+private fun replaceLayoutName(bean: ProjectBean, map:Map<String,String>){
     bean.javaFiles.forEach { path->
         val javaFile = File(path)
         val readLines = javaFile.readLines()
@@ -124,7 +124,7 @@ private fun String.convertToCamelCase(): String {
 }
 
 
-private fun replaceDrawableName(bean:ProjectBean,map:Map<String,String>){
+private fun replaceDrawableName(bean: ProjectBean, map:Map<String,String>){
     bean.javaFiles.forEach { path->
         val javaFile = File(path)
         val readLines = javaFile.readLines()

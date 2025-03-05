@@ -1,8 +1,8 @@
-package script.android
+package script.android.replaceInfo
 
 import java.io.File
 
-fun replaceIdName(allFiles:ProjectBean,stringPrefix:List<Pair<String,String>>,bindingNames:List<String>) {
+fun replaceIdName(allFiles: ProjectBean, stringPrefix:List<Pair<String,String>>, bindingNames:List<String>) {
     println("replace id name...")
 
     val isAddPrefix = stringPrefix.size == 1 && stringPrefix.first().first == ""
@@ -81,7 +81,7 @@ private fun isInclude(lines:List<String>,index:Int):Boolean{
     return false
 }
 
-private fun replaceAllIdName(bean:ProjectBean,map:Map<String,String>,bindingNames:List<String>,includeList: List<String>){
+private fun replaceAllIdName(bean: ProjectBean, map:Map<String,String>, bindingNames:List<String>, includeList: List<String>){
     bean.javaFiles.forEach { path->
         val javaFile = File(path)
         val readLines = javaFile.readLines()

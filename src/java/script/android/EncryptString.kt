@@ -1,8 +1,8 @@
-package script
+package script.android
 
-import script.android.aesDecrypt
-import script.android.aesEncrypt
-import script.android.md5
+import script.android.replaceInfo.aesDecrypt
+import script.android.replaceInfo.aesEncrypt
+import script.android.replaceInfo.md5
 import java.io.File
 
 private const val targetDirectory = ""

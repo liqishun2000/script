@@ -1,4 +1,4 @@
-package script
+package script.android
 
 import java.io.File
 

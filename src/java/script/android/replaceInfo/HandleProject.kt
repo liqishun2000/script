@@ -1,4 +1,4 @@
-package script.android
+package script.android.replaceInfo
 
 private const val targetProject: String = "E:\\code\\first\\app\\src\\main"
 private val stringPrefix = listOf(

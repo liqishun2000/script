@@ -1,24 +1,24 @@
-package script.android
+package script.android.replaceInfo
 
 import java.io.File
 
-fun replaceColorName(allFiles:ProjectBean, colorPrefix:List<Pair<String,String>>) {
-    println("replace color name...")
+fun replaceStringName(allFiles: ProjectBean, stringPrefix:List<Pair<String,String>>) {
+    println("replace string name...")
 
     val valuesDirectory = allFiles.resFiles.valuesDirectory.find { it.endsWith("values") }
         ?: throw Exception("can't find values directory")
 
-    val colorFile = File(valuesDirectory).listFiles()?.find { it.name == "colors.xml" } ?:
-    throw Exception("can't find colors.xml")
+    val stringFile = File(valuesDirectory).listFiles()?.find { it.name == "strings.xml" } ?:
+    throw Exception("can't find strings.xml")
 
-    val readLines = colorFile.readLines()
+    val readLines = stringFile.readLines()
     val map:MutableMap<String,String> = mutableMapOf()
     readLines.forEach { line->
         val trimIndent = line.trimIndent()
-        if(trimIndent.startsWith("<color")){
+        if(trimIndent.startsWith("<string")){
             val name = extractNameAttribute(trimIndent) ?: ""
 
-            colorPrefix.forEach { pair->
+            stringPrefix.forEach { pair->
                 if(name.startsWith(pair.first)){
                     val drop = name.drop(pair.first.length)
                     val newName = pair.second+drop
@@ -28,20 +28,20 @@ fun replaceColorName(allFiles:ProjectBean, colorPrefix:List<Pair<String,String>>
         }
     }
 
-    replaceAllColorName(allFiles,map)
+    replaceAllStringName(allFiles,map)
 
-    println("replace color name over")
+    println("replace string name over")
 }
 
-private fun replaceAllColorName(bean:ProjectBean, map:Map<String,String>){
+private fun replaceAllStringName(bean: ProjectBean, map:Map<String,String>){
     bean.javaFiles.forEach { path->
         val javaFile = File(path)
         val readLines = javaFile.readLines()
         val newLines = readLines.map { line->
             var newLine = line
             map.forEach{ pair->
-                val origin = "R.color.${pair.key}"
-                val target = "R.color.${pair.value}"
+                val origin = "R.string.${pair.key}"
+                val target = "R.string.${pair.value}"
                 if(newLine.contains(origin)){
                     newLine = newLine.replace(origin,target)
                 }
@@ -52,7 +52,7 @@ private fun replaceAllColorName(bean:ProjectBean, map:Map<String,String>){
     }
 
     bean.resFiles.valuesDirectory.forEach { path->
-        File(path).listFiles()?.find { it.name == "colors.xml" }?.let { file->
+        File(path).listFiles()?.find { it.name == "strings.xml" }?.let { file->
             val readLines = file.readLines()
             val newLines = readLines.map { line->
                 var newLine = line
@@ -75,8 +75,8 @@ private fun replaceAllColorName(bean:ProjectBean, map:Map<String,String>){
             val newLines = readLines.map { line->
                 var newLine = line
                 map.forEach{ pair->
-                    val origin = "@color/${pair.key}"
-                    val target = "@color/${pair.value}"
+                    val origin = "@string/${pair.key}"
+                    val target = "@string/${pair.value}"
                     if(newLine.contains(origin)){
                         newLine = newLine.replace(origin,target)
                     }

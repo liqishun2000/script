@@ -1,4 +1,4 @@
-package script.android
+package script.android.replaceInfo
 
 import java.io.File
 
