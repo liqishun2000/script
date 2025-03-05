@@ -147,6 +147,12 @@ private fun replaceAllIdName(bean:ProjectBean,map:Map<String,String>,bindingName
                     if(newLine.contains(originRef)){
                         newLine = newLine.replace(originRef,targetRef)
                     }
+
+                    val originRefDef = "=\"@+id/${pair.key}"
+                    val targetRefDef = "=\"@+id/${pair.value}"
+                    if(newLine.contains(originRefDef)){
+                        newLine = newLine.replace(originRefDef,targetRefDef)
+                    }
                 }
                 newLine
             }
