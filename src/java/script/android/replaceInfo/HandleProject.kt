@@ -41,6 +41,8 @@ val insertConfig = InsertConfig(
     /** 插入无用组件是ViewGroup组的概率 0-100 */
     createGroupProp = 25
 )
+//插入可以用正则表达式一键清除
+//<!--region 无用控件-->[\s\S]*?<!--endregion-->
 
 /**
  * 用于替换string资源名称，res目录下文件名，layout中的id名称
