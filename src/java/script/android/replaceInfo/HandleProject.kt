@@ -53,6 +53,7 @@ fun main() {
     val allFiles = getAllFiles(targetProject)
 
     replaceStringName(allFiles, stringPrefix)
+
     replaceColorName(allFiles, colorNamePrefix)
 
     replaceResFileName(allFiles, resPrefix)
@@ -60,6 +61,8 @@ fun main() {
     replaceIdName(allFiles, idPrefix, bindingNameList)
 
     insertUselessCompose(allFiles)
-//    replaceEncodeString(allFiles, encodeInfo)
+
+    replaceEncodeString(allFiles, encodeInfo)
+
     println("handle over")
 }

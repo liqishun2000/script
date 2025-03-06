@@ -2,6 +2,7 @@ package script.android.replaceInfo
 
 import java.io.File
 
+/** 替换string资源名称 */
 fun replaceStringName(allFiles: ProjectBean, stringPrefix:List<Pair<String,String>>) {
     println("replace string name...")
 

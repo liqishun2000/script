@@ -2,6 +2,7 @@ package script.android.replaceInfo
 
 import java.io.File
 
+/** 替换Id名称 */
 fun replaceIdName(allFiles: ProjectBean, stringPrefix:List<Pair<String,String>>, bindingNames:List<String>) {
     println("replace id name...")
 

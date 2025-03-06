@@ -8,6 +8,7 @@ private var stringNameList:List<String> = mutableListOf()
 private var drawableNameList:List<String> = mutableListOf()
 private var pictureNameList:List<String> = mutableListOf()
 
+/** 在layout中添加无用组件 */
 fun insertUselessCompose(allFiles: ProjectBean){
     println("start insert useless widget..")
 

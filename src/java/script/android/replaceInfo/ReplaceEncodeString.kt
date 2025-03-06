@@ -2,6 +2,7 @@ package script.android.replaceInfo
 
 import java.io.File
 
+/** 替换加密字符串 */
 fun replaceEncodeString(allFiles: ProjectBean, encodeInfo:List<Pair<String,String>>){
     println("replace encode string...")
 

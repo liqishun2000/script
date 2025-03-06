@@ -2,6 +2,7 @@ package script.android.replaceInfo
 
 import java.io.File
 
+/** 替换color名称 */
 fun replaceColorName(allFiles: ProjectBean, colorPrefix:List<Pair<String,String>>) {
     println("replace color name...")
 

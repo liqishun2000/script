@@ -2,6 +2,7 @@ package script.android.replaceInfo
 
 import java.io.File
 
+/** 替换res目录下文件名称 */
 fun replaceResFileName(allFiles: ProjectBean, resPrefix:List<Pair<String,String>>) {
     println("replace res file name...")
 
