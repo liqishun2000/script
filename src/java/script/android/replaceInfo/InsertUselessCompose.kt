@@ -345,12 +345,12 @@ private enum class Widget{
         override fun getPrivateAttribute(): List<String> {
             val list:MutableList<String> = mutableListOf()
             if(getRandomTrue(80)){
-                val stringName = stringNameList.shuffled().first()
+                val stringName = stringNameList.random()
                 list.add("    android:text=\"@string/${stringName}\"")
                 val size = Random.nextInt(10,30)
                 list.add("    android:textSize=\"${size}sp\"")
                 if (getRandomTrue(70)) {
-                    val colorName = colorNameList.shuffled().first()
+                    val colorName = colorNameList.random()
                     list.add("    android:textColor=\"@color/${colorName}\"")
                 }
                 if(getRandomTrue()){
@@ -382,10 +382,10 @@ private enum class Widget{
         override fun getPrivateAttribute(): List<String> {
             val list:MutableList<String> = mutableListOf()
             if(getRandomTrue(90)){
-                val pictureName = pictureNameList.shuffled().first()
+                val pictureName = pictureNameList.random()
                 list.add("    android:src=\"@drawable/${pictureName}\"")
                 if (getRandomTrue(70)) {
-                    val type = scaleTypeList.shuffled().first()
+                    val type = scaleTypeList.random()
                     list.add("    android:scaleType=\"${type}\"")
                 }
                 if (getRandomTrue()) {
@@ -477,17 +477,17 @@ private enum class Widget{
             //是否添加bg
             if(getRandomTrue()){
                 //是否是color
-                val colorName = colorNameList.shuffled().first()
+                val colorName = colorNameList.random()
                 list.add("    android:background=\"@color/$colorName\"")
             }else{
-                val drawableName = drawableNameList.shuffled().first()
+                val drawableName = drawableNameList.random()
                 list.add("    android:background=\"@drawable/$drawableName\"")
             }
         }
 
         //添加gravity
         if(getRandomTrue()){
-            val gravityName = gravityType.shuffled().first()
+            val gravityName = gravityType.random()
             list.add("    android:gravity=\"${gravityName}\"")
         }
 
@@ -517,15 +517,15 @@ private enum class Widget{
         )
 
         fun getRandomWidgetString():List<String>{
-            return Widget.entries.shuffled().first().createWidget()
+            return Widget.entries.random().createWidget()
         }
 
         fun getRandomViewString():List<String>{
-            return Widget.entries.filter { !it.isViewGroup() }.shuffled().first().createWidget()
+            return Widget.entries.filter { !it.isViewGroup() }.random().createWidget()
         }
 
 
-        fun getRandomViewGroup() = Widget.entries.filter { it.isViewGroup() }.shuffled().first()
+        fun getRandomViewGroup() = Widget.entries.filter { it.isViewGroup() }.random()
 
         fun createGroup(level:Int = 0):List<String>{
             var isViewGroup = false
