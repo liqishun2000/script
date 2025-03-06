@@ -172,9 +172,10 @@ private fun addInfoFromParent(parent: String,list:List<String>):List<String>{
     return handleList
 }
 
-private fun canInsert(parent:String):Boolean{
-    return when{
-        parent.contains("ScrollView")-> false
+private fun canInsert(parent: String): Boolean {
+    return when {
+        parent.contains("ScrollView") -> false
+        parent.contains("ViewFlipper") -> false
         else -> true
     }
 }
