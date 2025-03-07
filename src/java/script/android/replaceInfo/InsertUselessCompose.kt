@@ -447,14 +447,13 @@ private enum class Widget{
                 //visibility的属性是否为gone
                 list.add("    android:visibility=\"gone\"")
                 var zero = getRandomTrue()
-                var size = Random.nextInt(30)
+                val size = Random.nextInt(10,30)
                 if(zero){
                     list.add("    android:layout_width=\"${size}dp\"")
                 }else{
                     list.add("    android:layout_width=\"wrap_content\"")
                 }
                 zero = getRandomTrue()
-                size = Random.nextInt(30)
                 if(zero){
                     list.add("    android:layout_height=\"${size}dp\"")
                 }else{
