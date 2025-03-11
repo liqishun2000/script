@@ -70,7 +70,33 @@ private fun replaceAllColorName(bean: ProjectBean, map:Map<String,String>){
         }
     }
 
-    bean.resFiles.layoutDirectory.forEach { path->
+    handleDirectory(bean.resFiles.layoutDirectory,map)
+    handleDirectory(bean.resFiles.colorDirectory,map)
+
+    bean.resFiles.drawableDirectory.forEach { path->
+        File(path).listFiles()?.forEach { file->
+            if(file.name.endsWith(".xml")){
+                val readLines = file.readLines()
+                val newLines = readLines.map { line->
+                    var newLine = line
+                    map.forEach{ pair->
+                        val origin = "@color/${pair.key}"
+                        val target = "@color/${pair.value}"
+                        if(newLine.contains(origin)){
+                            newLine = newLine.replace(origin,target)
+                        }
+                    }
+                    newLine
+                }
+                file.writeText(newLines.joinToString("\r\n"))
+            }
+        }
+    }
+
+}
+
+private fun handleDirectory(pathList:List<String>,map:Map<String,String>){
+    pathList.forEach { path->
         File(path).listFiles()?.forEach { file->
             val readLines = file.readLines()
             val newLines = readLines.map { line->
