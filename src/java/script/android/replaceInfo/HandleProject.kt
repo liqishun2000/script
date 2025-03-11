@@ -39,7 +39,9 @@ val insertConfig = InsertConfig(
     /** ViewGroup最大子View */
     maxChildNum = 5,
     /** 插入无用组件是ViewGroup组的概率 0-100 */
-    createGroupProp = 25
+    createGroupProp = 25,
+    /** 文件太小则所有空格都插入无用组件 */
+    openAddMax = true,
 )
 //插入可以用正则表达式一键清除
 //<!--region 无用控件-->[\s\S]*?<!--endregion-->

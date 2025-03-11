@@ -20,10 +20,12 @@ fun insertUselessCompose(allFiles: ProjectBean){
     allFiles.resFiles.layoutDirectory.forEach { path->
         File(path).listFiles()?.forEach { file->
             val readText = file.readText()
+            val readLines = file.readLines()
+            val addMax = insertConfig.openAddMax && readLines.size<80
             var handleXml = removeEndEmptyLines(readText)
             handleXml = removeInnerEmptyLines(handleXml)
             handleXml = insertEmptyLines(handleXml)
-            val handleText = insertTextToRandomEmptyLines(handleXml)
+            val handleText = insertTextToRandomEmptyLines(handleXml,addMax)
             file.writeText(handleText)
         }
     }
@@ -109,7 +111,7 @@ private fun extractNameAttribute(xmlString: String): String? {
     return matchResult?.groupValues?.get(1)
 }
 
-private fun insertTextToRandomEmptyLines(xmlContent: String): String {
+private fun insertTextToRandomEmptyLines(xmlContent: String,addMax:Boolean = false): String {
     val lines = xmlContent.split("\r\n").toMutableList()
 
     // 查找所有空行的索引
@@ -117,8 +119,13 @@ private fun insertTextToRandomEmptyLines(xmlContent: String): String {
 
     if (emptyLineIndices.isEmpty()) return xmlContent
 
-    val from = (emptyLineIndices.size * insertConfig.percent.first/100f).toInt()
-    val end = (emptyLineIndices.size * insertConfig.percent.last/100f).toInt()
+    var from = (emptyLineIndices.size * insertConfig.percent.first/100f).toInt()
+    var end = (emptyLineIndices.size * insertConfig.percent.last/100f).toInt()
+
+    if(addMax){
+        from = emptyLineIndices.size
+        end = emptyLineIndices.size
+    }
 
     val randomNum = if(from<end){
         Random.nextInt(from,end)
@@ -140,7 +147,7 @@ private fun insertTextToRandomEmptyLines(xmlContent: String): String {
             val widget = if (getRandomTrue(insertConfig.createGroupProp)) {
                 Widget.createGroup()
             }else{
-                Widget.getRandomWidgetString()
+                Widget.getRandomViewString()
             }
             val handleWidget = addInfoFromParent(findParentControl, widget)
 
@@ -151,6 +158,41 @@ private fun insertTextToRandomEmptyLines(xmlContent: String): String {
     return handleContent
 }
 
+private fun amendWidget(list: List<String>):List<String>{
+    val handleList:MutableList<String> = mutableListOf()
+    val text = list.joinToString()
+    if(hasGoneAttribute(text) && !text.contains("android:visibility=")){
+        //添加gone
+        handleList.addAll(list)
+        handleList.add(1,"    android:visibility=\"gone\"")
+    }else if(hasGoneAttribute(text) && text.contains("android:visibility=")){
+        //替换为gone
+        list.forEach { line->
+            if(line.contains("android:visibility=")){
+                handleList.add("    android:visibility=\"gone\"")
+            }else{
+                handleList.add(line)
+            }
+        }
+    }else{
+        handleList.addAll(list)
+    }
+
+    return handleList
+}
+
+private fun hasGoneAttribute(text:String):Boolean{
+    val list = listOf(
+        "android:text=",
+        "android:src=",
+        "android:background=",
+    )
+    list.forEach {
+        if(text.contains(it)) return true
+    }
+    return false
+}
+
 private fun addInfoFromParent(parent: String,list:List<String>):List<String>{
     val handleList:MutableList<String> = mutableListOf()
     handleList.addAll(list)
@@ -159,16 +201,26 @@ private fun addInfoFromParent(parent: String,list:List<String>):List<String>{
             "    app:layout_constraintTop_toTopOf=\"parent\"",
             "    app:layout_constraintStart_toStartOf=\"parent\"",
         ))
-        if (getRandomTrue()) {
-            handleList.addAll(1, listOf(
-                "    app:layout_constraintEnd_toEndOf=\"parent\"",
-            ))
+        var canAddOtherConstraint = true
+        handleList.forEach { line->
+            if(line.contains("android:layout_width=\"0dp\"") || line.contains("android:layout_height=\"0dp\"")){
+                canAddOtherConstraint = false
+            }
         }
-        if (getRandomTrue()) {
-            handleList.addAll(1, listOf(
-                "    app:layout_constraintBottom_toBottomOf=\"parent\"",
-            ))
+
+        if(canAddOtherConstraint){
+            if (getRandomTrue()) {
+                handleList.addAll(1, listOf(
+                    "    app:layout_constraintEnd_toEndOf=\"parent\"",
+                ))
+            }
+            if (getRandomTrue()) {
+                handleList.addAll(1, listOf(
+                    "    app:layout_constraintBottom_toBottomOf=\"parent\"",
+                ))
+            }
         }
+
     }
     return handleList
 }
@@ -337,6 +389,7 @@ data class InsertConfig(
     val maxLevel:Int,
     val maxChildNum:Int,
     val createGroupProp:Int,
+    val openAddMax:Boolean,
 )
 
 private enum class Widget{
@@ -381,7 +434,7 @@ private enum class Widget{
         override fun getStart() = "<ImageView"
         override fun getPrivateAttribute(): List<String> {
             val list:MutableList<String> = mutableListOf()
-            if(getRandomTrue(90)){
+            if(getRandomTrue(80)){
                 val pictureName = pictureNameList.random()
                 list.add("    android:src=\"@drawable/${pictureName}\"")
                 if (getRandomTrue(70)) {
@@ -520,7 +573,9 @@ private enum class Widget{
         }
 
         fun getRandomViewString():List<String>{
-            return Widget.entries.filter { !it.isViewGroup() }.random().createWidget()
+            return Widget.entries.filter { !it.isViewGroup() }.random().createWidget().let {
+                amendWidget(it)
+            }
         }
 
 
