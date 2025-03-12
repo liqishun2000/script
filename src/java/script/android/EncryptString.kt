@@ -32,7 +32,7 @@ private fun traversalFilesAndHandle(file: File){
 }
 
 
-fun replaceEncodeString(file: File){
+private fun replaceEncodeString(file: File){
 
     val key = getKey(appInfoPair)
 
