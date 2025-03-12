@@ -33,7 +33,7 @@ private val encodeInfo = listOf(
 //插入无用控件配置
 val insertConfig = InsertConfig(
     /** 空行插入无用组件概率 0-100 */
-    percent = 90..100,
+    percent = 40..60,
     /** 无用ViewGroup最大嵌套层数 */
     maxLevel = 2,
     /** ViewGroup最大子View */
