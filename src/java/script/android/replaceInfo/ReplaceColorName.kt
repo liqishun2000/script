@@ -70,6 +70,7 @@ private fun replaceAllColorName(bean: ProjectBean, map:Map<String,String>){
         }
     }
 
+    handleDirectory(bean.resFiles.valuesDirectory,map)
     handleDirectory(bean.resFiles.layoutDirectory,map)
     handleDirectory(bean.resFiles.colorDirectory,map)
 
