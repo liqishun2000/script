@@ -589,7 +589,7 @@ private enum class Widget{
             if(level == 0){
                 isViewGroup = true
             }
-            val list:MutableList<String> = mutableListOf()
+            var list:MutableList<String> = mutableListOf()
             val empty = level*4
 
             if(isViewGroup){
@@ -604,6 +604,7 @@ private enum class Widget{
                 }
                 list.add(" ".repeat(empty+4)+">")
                 list.add(" ".repeat(empty))
+                list = amendWidget(list).toMutableList()
 
                 val nextInt = Random.nextInt(1,insertConfig.maxChildNum)
                 for (i in 0 until nextInt) {
