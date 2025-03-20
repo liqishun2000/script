@@ -64,6 +64,7 @@ fun main() {
 
     insertUselessCompose(allFiles)
 
+    //本地解密方法的key记得换
     replaceEncodeString(allFiles, encodeInfo)
 
     println("handle over")
