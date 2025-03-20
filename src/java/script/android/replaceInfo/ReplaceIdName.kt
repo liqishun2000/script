@@ -25,7 +25,8 @@ fun replaceIdName(allFiles: ProjectBean, stringPrefix:List<Pair<String,String>>,
                         }else{
                             stringPrefix.forEach { pair->
                                 if(id.startsWith(pair.first)){
-                                    val drop = id.drop(pair.first.length)
+                                    val handleId = getBindingName(id)
+                                    val drop = handleId.drop(pair.first.length)
                                     val newName = pair.second+drop
                                     map[id] = newName
                                 }
@@ -166,7 +167,7 @@ private fun getBindingName(layoutId:String):String{
     return if ('_' in layoutId) {
         layoutId.split('_')
             .joinToString("") { part ->
-                part.lowercase().replaceFirstChar { it.uppercase() }
+                part.replaceFirstChar { it.uppercase() }
             }.replaceFirstChar { it.lowercase() }
     } else {
         layoutId
