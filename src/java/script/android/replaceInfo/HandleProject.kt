@@ -61,6 +61,8 @@ fun main() {
     replaceResFileName(allFiles, resPrefix)
 
     replaceIdName(allFiles, idPrefix, bindingNameList)
+    //已有前缀的id替换
+    replaceIdNameV2(allFiles, idPrefix)
 
     insertUselessCompose(allFiles)
 
