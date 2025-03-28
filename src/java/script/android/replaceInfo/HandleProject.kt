@@ -42,6 +42,10 @@ val insertConfig = InsertConfig(
     createGroupProp = 25,
     /** 文件太小则所有空格都插入无用组件 */
     openAddMax = true,
+    /** 控件随机属性 过滤资源文件名/资源name */
+    filterSet = setOf(
+        "notification"
+    )
 )
 //插入可以用正则表达式一键清除
 //<!--region 无用控件-->[\s\S]*?<!--endregion-->

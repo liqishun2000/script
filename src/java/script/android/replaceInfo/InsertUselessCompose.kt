@@ -12,10 +12,10 @@ private var pictureNameList:List<String> = mutableListOf()
 fun insertUselessCompose(allFiles: ProjectBean){
     println("start insert useless widget..")
 
-    colorNameList = getColorName(allFiles)
-    stringNameList = getStringName(allFiles)
-    drawableNameList = getDrawableName(allFiles)
-    pictureNameList = getPictureName(allFiles)
+    colorNameList = getColorName(allFiles).filter { !insertConfig.filterSet.contains(it) }
+    stringNameList = getStringName(allFiles).filter { !insertConfig.filterSet.contains(it) }
+    drawableNameList = getDrawableName(allFiles).filter { !insertConfig.filterSet.contains(it) }
+    pictureNameList = getPictureName(allFiles).filter { !insertConfig.filterSet.contains(it) }
 
     allFiles.resFiles.layoutDirectory.forEach { path->
         File(path).listFiles()?.forEach { file->
@@ -390,6 +390,7 @@ data class InsertConfig(
     val maxChildNum:Int,
     val createGroupProp:Int,
     val openAddMax:Boolean,
+    val filterSet: Set<String>,
 )
 
 private enum class Widget{
