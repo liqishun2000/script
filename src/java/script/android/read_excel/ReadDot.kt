@@ -161,20 +161,20 @@ private fun main() {
         val regex = Regex("""^(\d+)""")
         regex.find(infos)?.groupValues?.get(1)?.let {
             val units = infos.split("\t").filter { it.isNotBlank() }
-            val id = units[0]
-            val remark = units[1]
-            println(createOutput(id,remark))
+            println(createOutput(units))
         }
     }
 }
 
-private fun createOutput(id:String,remark:String):String{
+private fun createOutput(units:List<String>):String{
+    val id = units[0]
+    val dotName = units[1]
     val idName = replaceId(id)
 
     return """
-    /** $id $remark */
+    /** $id $dotName */
     const val $idName = "$id"
-    """.trimIndent().split("\n").map { "    $it" }.joinToString("\n")
+    """.trimIndent().split("\n").joinToString("\n") { "    $it" }
 }
 
 private fun replaceId(id:String):String{
