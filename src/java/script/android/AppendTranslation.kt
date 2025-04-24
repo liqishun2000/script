@@ -139,7 +139,7 @@ private val languageKeyMap = mapOf(
     "英文" to "en",
     "越南语" to "vi-rVN",
     "阿拉伯语" to "ar-rEG",
-    "俄罗斯语" to "ru-rRu",
+    "俄罗斯语" to "ru-rRU",
     "中文繁体" to "zh-rTW",
     "中文简体" to "zh-rCN",
 )
