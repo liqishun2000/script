@@ -117,6 +117,8 @@ private fun getLanguageFile():Map<String,File>{
     //印尼语 - in-rID
     //英语 - en
     //越南语 - vi-rVN
+//    "阿拉伯语" to "ar-rEG",
+//    "俄罗斯语" to "ru-rRu",
     //中文繁体 - zh-rTW
     //中文简体 - zh-rCN
 }
@@ -136,6 +138,8 @@ private val languageKeyMap = mapOf(
     "印尼语" to "in-rID",
     "英文" to "en",
     "越南语" to "vi-rVN",
+    "阿拉伯语" to "ar-rEG",
+    "俄罗斯语" to "ru-rRu",
     "中文繁体" to "zh-rTW",
     "中文简体" to "zh-rCN",
 )
