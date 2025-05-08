@@ -47,8 +47,8 @@ private fun replaceEncodeString(file: File){
         }.onFailure {
             val list = splitWithSeparators(handleString,userRegex)
 
-            if(userRegex.containsMatchIn(handleString)){
-                handleString = list.joinToString("", prefix = "\"", postfix = "\""){ part->
+            handleString = if(userRegex.containsMatchIn(handleString)){
+                list.joinToString("", prefix = "\"", postfix = "\""){ part->
                     if(userRegex.matches(part)){
                         part
                     }else{
