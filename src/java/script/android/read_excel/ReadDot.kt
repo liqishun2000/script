@@ -169,7 +169,7 @@ private fun main() {
 private fun createOutput(units:List<String>):String{
     val id = units[0]
     val dotName = units[1]
-    val idName = replaceId(id)
+    val idName = "_$id"
 
     return """
     /** $id $dotName */
@@ -177,23 +177,23 @@ private fun createOutput(units:List<String>):String{
     """.trimIndent().split("\n").joinToString("\n") { "    $it" }
 }
 
-private fun replaceId(id:String):String{
-    val idName = StringBuilder()
-    for (c in id) {
-        val newChar = when(c){
-            '1'-> 'y'
-            '2'-> 'e'
-            '3'-> 'x'
-            '4'-> 's'
-            '5'-> 'w'
-            '6'-> 'z'
-            '7'-> 'q'
-            '8'-> 'b'
-            '9'-> 'j'
-            '0'-> 'l'
-            else->'a'
-        }
-        idName.append(newChar)
-    }
-    return idName.toString()
-}
+//private fun replaceId(id:String):String{
+//    val idName = StringBuilder()
+//    for (c in id) {
+//        val newChar = when(c){
+//            '1'-> 'y'
+//            '2'-> 'e'
+//            '3'-> 'x'
+//            '4'-> 's'
+//            '5'-> 'w'
+//            '6'-> 'z'
+//            '7'-> 'q'
+//            '8'-> 'b'
+//            '9'-> 'j'
+//            '0'-> 'l'
+//            else->'a'
+//        }
+//        idName.append(newChar)
+//    }
+//    return idName.toString()
+//}
