@@ -1,13 +1,13 @@
-package script.android
+package script.android.stringRes
 
 import java.io.File
 
-const val translationFilePath = "E:\\work\\scanner\\1.2.0.0\\QR二维码翻译 V1.2.0.0\\QR二维码翻译 V1.2.0.0"
-const val targetProjectResFilePath = "E:\\tem\\res"
-const val endFlag = "</resources>"
+private const val translationFilePath = "E:\\work\\scanner\\1.2.0.0\\QR二维码翻译 V1.2.0.0\\QR二维码翻译 V1.2.0.0"
+private const val targetProjectResFilePath = "E:\\tem\\res"
+private const val endFlag = "</resources>"
 
-//翻译文本添加到文件中
-fun main() {
+//替换string.xml中相同name的content
+private fun main() {
     val languageFileMap = getLanguageFile()
 
     val resFile = File(targetProjectResFilePath)
@@ -74,15 +74,19 @@ private fun addBackslashBeforeSingleQuote(input: String): String {
 
 private fun insertLinesBeforeLastTag(file: File, newLines: List<String>) {
     val lines = file.readLines().toMutableList()
-
-    when {
-        lines.last().contains(endFlag) -> {
-            // 在结尾标识前批量插入多行
-            lines.addAll(lines.lastIndex, newLines)
-        }
-        else -> {
-            // 无结尾标识时在文件末尾插入
-            lines.addAll(newLines)
+    val regex = Regex(""">([^<]+)</""")
+    for(i in lines.indices){
+        val origin = lines[i]
+        val originName = extractNameAttribute(origin)
+        newLines.forEach { newContent->
+            val newName = extractNameAttribute(newContent)
+            if(!originName.isNullOrBlank() && !newName.isNullOrBlank() && newName == originName){
+                extractContentAttribute(newContent)?.let { newValue->
+                    val handleString = regex.replace(origin,">$newValue</")
+                    lines[i] = handleString
+                    return@forEach
+                }
+            }
         }
     }
 
@@ -90,6 +94,18 @@ private fun insertLinesBeforeLastTag(file: File, newLines: List<String>) {
     file.writeText(lines.joinToString("\n"))
 }
 
+
+private fun extractNameAttribute(xmlString: String): String? {
+    val pattern = Regex("""name=["']([^"']+)["']""")
+    val matchResult = pattern.find(xmlString)
+    return matchResult?.groupValues?.get(1)
+}
+
+private fun extractContentAttribute(xmlString: String): String? {
+    val pattern = Regex(""">([^<]+)</""")
+    val matchResult = pattern.find(xmlString)
+    return matchResult?.groupValues?.get(1)
+}
 private fun getLanguageFile():Map<String,File>{
     val origin = File(translationFilePath)
     val listFiles = origin.listFiles()
