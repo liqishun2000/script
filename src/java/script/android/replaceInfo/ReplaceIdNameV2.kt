@@ -26,7 +26,7 @@ fun replaceIdNameV2(allFiles: ProjectBean, stringPrefix:List<Pair<String,String>
                             stringPrefix.forEach { pair->
                                 if(id.startsWith(pair.first)){
                                     val handleId = getBindingName(id)
-                                    val drop = handleId.drop(pair.first.length)
+                                    val drop = handleId.drop(pair.first.replace("_","").length)
                                     val newName = pair.second+drop
                                     map[id] = newName
                                 }
@@ -52,17 +52,19 @@ private fun replaceAllIdName(bean: ProjectBean, map:Map<String,String>){
         val readLines = javaFile.readLines()
         val newLines = readLines.map { line->
             var newLine = line
-            map.forEach{ pair->
-                val originId = "R.id.${pair.key}"
-                val targetId = "R.id.${pair.value}"
-                if (newLine.contains(originId)) {
-                    newLine = newLine.replace(originId, targetId)
-                }
+            if(!line.startsWith("import") && !line.startsWith("package")){
+                map.forEach{ pair->
+                    val originId = "R.id.${pair.key}"
+                    val targetId = "R.id.${pair.value}"
+                    if (newLine.contains(originId)) {
+                        newLine = newLine.replace(originId, targetId)
+                    }
 
-                val bindingName = getBindingName(pair.key)
-                val newName = pair.value
-                val regex = Regex("\\b${Regex.escape(bindingName)}\\b")
-                newLine = newLine.replace(regex,newName)
+                    val bindingName = getBindingName(pair.key)
+                    val newName = pair.value
+                    val regex = Regex("\\b${Regex.escape(bindingName)}\\b")
+                    newLine = newLine.replace(regex,newName)
+                }
             }
             newLine
         }
@@ -115,10 +117,13 @@ private fun addPrefix(original: String,prefix:String): String {
     val camelCase = if ('_' in original) {
         original.split('_')
             .joinToString("") { part ->
-                part.lowercase().replaceFirstChar { it.uppercase() }
+                part.replaceFirstChar { it.uppercase() }
             }
     } else {
         original.replaceFirstChar { it.uppercase() }
+    }
+    if(camelCase.startsWith(prefix,true)){
+        return camelCase.replaceFirstChar { it.lowercase() }
     }
     return "$prefix$camelCase"
 }
