@@ -12,10 +12,10 @@ private var pictureNameList:List<String> = mutableListOf()
 fun insertUselessCompose(allFiles: ProjectBean){
     println("start insert useless widget..")
 
-    colorNameList = getColorName(allFiles).filter { !insertConfig.filterSet.contains(it) }
-    stringNameList = getStringName(allFiles).filter { !insertConfig.filterSet.contains(it) }
-    drawableNameList = getDrawableName(allFiles).filter { !insertConfig.filterSet.contains(it) }
-    pictureNameList = getPictureName(allFiles).filter { !insertConfig.filterSet.contains(it) }
+    colorNameList = getColorName(allFiles).filter { res-> insertConfig.filterSet.all { !res.contains(it) } }
+    stringNameList = getStringName(allFiles).filter { res-> insertConfig.filterSet.all { !res.contains(it) } }
+    drawableNameList = getDrawableName(allFiles).filter { res-> insertConfig.filterSet.all { !res.contains(it) } }
+    pictureNameList = getPictureName(allFiles).filter { res-> insertConfig.filterSet.all { !res.contains(it) } }
 
     allFiles.resFiles.layoutDirectory.forEach { path->
         File(path).listFiles()?.forEach { file->
