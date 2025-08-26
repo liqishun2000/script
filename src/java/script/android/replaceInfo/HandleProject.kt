@@ -14,7 +14,7 @@ private val resPrefix = listOf(
     "text_" to "new_",
 )
 
-//first为null size为1 则为添加前缀 替换前缀id格式为头分法
+//first为null size为1 则为添加前缀(如果已有前缀则不会添加,改写为驼峰法) 替换前缀id格式为头分法
 private val idPrefix = listOf(
     "" to "new",
 )
