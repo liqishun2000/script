@@ -6,7 +6,7 @@ import kotlin.random.Random
 private var colorNameList:List<String> = mutableListOf()
 private var stringNameList:List<String> = mutableListOf()
 private var drawableNameList:List<String> = mutableListOf()
-private var pictureNameList:List<String> = mutableListOf()
+private var pictureNameList:List<Pair<String, String>> = mutableListOf()
 
 /** 在layout中添加无用组件 */
 fun insertUselessCompose(allFiles: ProjectBean){
@@ -15,7 +15,7 @@ fun insertUselessCompose(allFiles: ProjectBean){
     colorNameList = getColorName(allFiles).filter { res-> insertConfig.filterSet.all { !res.contains(it) } }
     stringNameList = getStringName(allFiles).filter { res-> insertConfig.filterSet.all { !res.contains(it) } }
     drawableNameList = getDrawableName(allFiles).filter { res-> insertConfig.filterSet.all { !res.contains(it) } }
-    pictureNameList = getPictureName(allFiles).filter { res-> insertConfig.filterSet.all { !res.contains(it) } }
+    pictureNameList = getPictureName(allFiles).filter { res-> insertConfig.filterSet.all { !res.second.contains(it) } }
 
     allFiles.resFiles.layoutDirectory.forEach { path->
         File(path).listFiles()?.forEach { file->
@@ -38,12 +38,24 @@ private fun getRandomTrue(percent:Int = 50):Boolean{
     return Random.nextInt(100)<percent
 }
 
-private fun getPictureName(allFiles: ProjectBean):List<String>{
-    val list:MutableList<String> = mutableListOf()
+private fun getPictureName(allFiles: ProjectBean):List<Pair<String, String>>{
+    val set: MutableSet<String> = mutableSetOf()
+    val list: MutableList<Pair<String, String>> = mutableListOf()
     allFiles.resFiles.drawableDirectory.forEach { path->
         File(path).listFiles()?.forEach { file->
-            if(!file.name.endsWith(".xml")){
-                list.add(file.name.substringBeforeLast("."))
+            val name = file.name.substringBeforeLast(".")
+            if(!file.name.endsWith(".xml") && !set.contains(name)){
+                list.add("drawable" to name)
+                set.add(name)
+            }
+        }
+    }
+    allFiles.resFiles.mipmapDirectory.forEach { path->
+        File(path).listFiles()?.forEach { file->
+            val name = file.name.substringBeforeLast(".")
+            if(!set.contains(name)){
+                list.add("mipmap" to name)
+                set.add(name)
             }
         }
     }
@@ -351,6 +363,37 @@ private fun findParentName(xmlContent: String, insertLineNumber: Int): String? {
     return null
 }
 
+private fun getLevel(xmlContent: String, line: Int): Int {
+    val lines = xmlContent.split("\r\n")
+    val tagStack = ArrayDeque<String>()
+    var currentLine = 0
+
+    while (currentLine < lines.size) {
+        if (currentLine == line) {
+            return tagStack.size
+        }
+
+        val line = lines[currentLine].trim()
+        when {
+            line.startsWith("</") || line.contains("/>") -> { // 结束标签
+                if (tagStack.isNotEmpty()) {
+                    tagStack.removeLast()
+                }
+                currentLine++
+            }
+            line.startsWith("<") && !line.startsWith("<?") && !line.startsWith("<!--") -> { // 开始标签
+                val tagName = parseTagName(line)
+                if (!isSelfClosing(line)) {
+                    tagStack.addLast(tagName)
+                }
+                currentLine++
+            }
+            else -> currentLine++
+        }
+    }
+    return 0
+}
+
 
 
 private fun parseTagName(line: String): String {
@@ -364,12 +407,11 @@ private fun isSelfClosing(line: String): Boolean {
 }
 
 private fun insertWithIndent(xmlContent: String, insertLine: Int, content: List<String>): String {
-    val parent = findParentName(xmlContent, insertLine)
+    val level = getLevel(xmlContent, insertLine)
     val lines = xmlContent.split("\r\n").toMutableList()
 
     // 自动计算缩进
-    val baseIndent = lines.getOrNull(insertLine)?.takeWhile { it == ' ' }?.length ?: 0
-    val indent = if (parent != null) baseIndent + 4 else baseIndent
+    val indent = level * 4
 
     // 插入带缩进的内容
     val handleContentList = content.map { data->
@@ -437,7 +479,7 @@ private enum class Widget{
             val list:MutableList<String> = mutableListOf()
             if(getRandomTrue(80)){
                 val pictureName = pictureNameList.random()
-                list.add("    android:src=\"@drawable/${pictureName}\"")
+                list.add("    android:src=\"@${pictureName.first}/${pictureName.second}\"")
                 if (getRandomTrue(70)) {
                     val type = scaleTypeList.random()
                     list.add("    android:scaleType=\"${type}\"")

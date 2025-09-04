@@ -12,6 +12,7 @@ data class ResourceFiles(
     val drawableDirectory: List<String> = listOf(),
     val layoutDirectory: List<String> = listOf(),
     val valuesDirectory: List<String> = listOf(),
+    val mipmapDirectory: List<String> = listOf(),
 )
 
 fun getAllFiles(mainPath: String): ProjectBean {
@@ -41,6 +42,7 @@ private fun handleResFiles(file: File): ResourceFiles {
     val valuesDirectory: MutableList<String> = mutableListOf()
     val colorDirectory:MutableList<String> = mutableListOf()
     val drawableDirectory:MutableList<String> = mutableListOf()
+    val mipmapDirectory:MutableList<String> = mutableListOf()
     file.listFiles()?.forEach {
         when {
             it.name == "layout" -> {
@@ -56,6 +58,9 @@ private fun handleResFiles(file: File): ResourceFiles {
             it.name.contains("drawable")->{
                 drawableDirectory.add(it.absolutePath)
             }
+            it.name.contains("mipmap")->{
+                mipmapDirectory.add(it.absolutePath)
+            }
         }
     }
     return ResourceFiles(
@@ -63,6 +68,7 @@ private fun handleResFiles(file: File): ResourceFiles {
         valuesDirectory = valuesDirectory,
         colorDirectory = colorDirectory,
         drawableDirectory = drawableDirectory,
+        mipmapDirectory = mipmapDirectory,
     )
 }
 
