@@ -94,6 +94,10 @@ private fun replaceAllIdName(bean: ProjectBean, map:Map<String,String>){
                     if(newLine.contains(originRefDef)){
                         newLine = newLine.replace(originRefDef,targetRefDef)
                     }
+
+                    if(newLine.contains("app:constraint_referenced_ids=")){
+                        newLine = newLine.replace(pair.key,pair.value)
+                    }
                 }
                 newLine
             }
