@@ -5,12 +5,12 @@ import java.io.FileInputStream
 import java.io.FileOutputStream
 
 fun main() {
-    val targetFileName = "easytsl_notification_button_s_"
+    val targetFileName = "phtkr_bu_s_000"
     val suffixString = ".png"
     var targetIndex = 0
 
     val parentFile =
-        File("E:\\WXData\\WXWork\\1688857010618043\\Cache\\File\\2025-05\\中按钮(8)\\中按钮")
+        File("E:\\WXData\\WXWork\\1688857010618043\\Cache\\File\\2025-09\\小(13)\\小")
     val outPutFile = File(parentFile.absolutePath + "-output")
 
     outPutFile.mkdirs()
@@ -19,7 +19,7 @@ fun main() {
     files.forEachIndexed { index, file ->
         println("index:$index fileName:${file.name}")
         val temFile =
-            File(outPutFile.absolutePath + "\\$targetFileName${extraNum(file.name)}$suffixString")
+            File(outPutFile.absolutePath + "\\$targetFileName${extraNum(file.name).formatNum()}$suffixString")
 //            File(outPutFile.absolutePath + "\\$targetFileName${targetIndex}$suffixString")
         val inputStream = FileInputStream(file)
         val outPutStream = FileOutputStream(temFile)
@@ -37,6 +37,10 @@ fun main() {
     }
 
 
+}
+
+private fun String.formatNum(): String{
+    return String.format("%02d",this.toInt())
 }
 
 private fun extraNum(name:String):String{
