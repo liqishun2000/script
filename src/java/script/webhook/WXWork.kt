@@ -10,8 +10,12 @@ import java.security.MessageDigest
 
 fun main() {
     val webhookUrl = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=9e3de4e3-b5a3-499d-98b8-75406bba434e"
-    simpleTest()
+//    simpleTest()
 
+    mainUpgradeTest()
+
+
+    //region demo测试
     // 发送文本消息
 //    sendWechatMessage(
 //        webhookUrl = webhookUrl,
@@ -57,8 +61,10 @@ fun main() {
 //            )
 //        )
 //    )
+    //endregion
 }
 
+//region demo
 // 图文卡片消息结构
 data class Article(
     val title: String,
@@ -238,6 +244,7 @@ private fun getImageBase64AndMd5(filePath: String): Pair<String, String>? {
         null
     }
 }
+//endregion
 
 //region 指定用户
 private fun designateUser() {
@@ -339,6 +346,227 @@ private fun buildJsonPayload(
 // 辅助函数：将列表转换为JSON数组字符串
 private fun List<String>.toJsonString(): String {
     return if (isEmpty()) "[]" else "[\"${joinToString("\", \"")}\"]"
+}
+//endregion
+
+//region upgrade test
+
+data class WechatMessage(
+    val msgtype: String,
+    val text: TextContent? = null,
+    val markdown: MarkdownContent? = null
+)
+
+data class TextContent(
+    val content: String,
+    val mentioned_list: List<String>? = null,
+    val mentioned_mobile_list: List<String>? = null
+)
+
+data class MarkdownContent(
+    val content: String
+)
+
+class WechatBot(private val webhookUrl: String) {
+
+    /**
+     * 发送文本消息（支持@功能）
+     */
+    fun sendTextMessage(content: String, mentionedList: List<String>? = null, mentionedMobileList: List<String>? = null): Boolean {
+        val message = WechatMessage(
+            msgtype = "text",
+            text = TextContent(content, mentionedList, mentionedMobileList)
+        )
+        return sendMessage(message)
+    }
+
+    /**
+     * 发送Markdown消息（支持高亮、格式化）
+     */
+    fun sendMarkdownMessage(content: String): Boolean {
+        val message = WechatMessage(
+            msgtype = "markdown",
+            markdown = MarkdownContent(content)
+        )
+        return sendMessage(message)
+    }
+
+    /**
+     * 发送带高亮的成功消息
+     */
+    fun sendSuccessMessage(title: String, content: String, highlightItems: List<String> = emptyList()): Boolean {
+        val markdownContent = buildMarkdownContent(title, content, highlightItems, "success")
+        return sendMarkdownMessage(markdownContent)
+    }
+
+    /**
+     * 发送带高亮的警告消息
+     */
+    fun sendWarningMessage(title: String, content: String, highlightItems: List<String> = emptyList()): Boolean {
+        val markdownContent = buildMarkdownContent(title, content, highlightItems, "warning")
+        return sendMarkdownMessage(markdownContent)
+    }
+
+    /**
+     * 发送带高亮的错误消息
+     */
+    fun sendErrorMessage(title: String, content: String, highlightItems: List<String> = emptyList()): Boolean {
+        val markdownContent = buildMarkdownContent(title, content, highlightItems, "error")
+        return sendMarkdownMessage(markdownContent)
+    }
+
+    /**
+     * 发送带高亮的信息消息
+     */
+    fun sendInfoMessage(title: String, content: String, highlightItems: List<String> = emptyList()): Boolean {
+        val markdownContent = buildMarkdownContent(title, content, highlightItems, "info")
+        return sendMarkdownMessage(markdownContent)
+    }
+
+    private fun buildMarkdownContent(title: String, content: String, highlightItems: List<String>, type: String): String {
+        val emoji = when (type) {
+            "success" -> "✅"
+            "warning" -> "⚠️"
+            "error" -> "❌"
+            else -> "ℹ️"
+        }
+
+        val titleColor = when (type) {
+            "success" -> "info"  // 绿色
+            "warning" -> "warning"  // 黄色
+            "error" -> "danger"  // 红色
+            else -> "comment"  // 灰色
+        }
+
+        val builder = StringBuilder()
+        builder.append("<font color=\"$titleColor\">**$emoji $title**</font>\n\n")
+        builder.append("$content\n\n")
+
+        if (highlightItems.isNotEmpty()) {
+            builder.append("**高亮信息:**\n")
+            highlightItems.forEach { item ->
+                builder.append("> • <font color=\"warning\">$item</font>\n")
+            }
+        }
+
+        return builder.toString()
+    }
+
+    private fun sendMessage(message: WechatMessage): Boolean {
+        val jsonPayload = when (message.msgtype) {
+            "text" -> """
+                {
+                    "msgtype": "text",
+                    "text": {
+                        "content": "${escapeJson(message.text?.content ?: "")}",
+                        ${if (!message.text?.mentioned_list.isNullOrEmpty()) "\"mentioned_list\": ${message.text.mentioned_list.toJsonString()}," else ""}
+                        ${if (!message.text?.mentioned_mobile_list.isNullOrEmpty()) "\"mentioned_mobile_list\": ${message.text.mentioned_mobile_list.toJsonString()}," else ""}
+                    }
+                }
+            """.trimIndent().replace(",\n}", "\n}")  // 移除尾随逗号
+
+            "markdown" -> """
+                {
+                    "msgtype": "markdown",
+                    "markdown": {
+                        "content": "${escapeJson(message.markdown?.content ?: "")}"
+                    }
+                }
+            """.trimIndent()
+
+            else -> throw IllegalArgumentException("不支持的消息类型: ${message.msgtype}")
+        }
+
+        return sendRequest(jsonPayload)
+    }
+
+    private fun escapeJson(text: String): String {
+        return text.replace("\"", "\\\"")
+            .replace("\n", "\\n")
+            .replace("\r", "\\r")
+            .replace("\t", "\\t")
+    }
+
+    private fun sendRequest(jsonPayload: String): Boolean {
+        try {
+            val url = URL(webhookUrl)
+            val conn = url.openConnection() as HttpURLConnection
+            conn.apply {
+                requestMethod = "POST"
+                doOutput = true
+                setRequestProperty("Content-Type", "application/json; charset=UTF-8")
+                connectTimeout = 5000
+                readTimeout = 5000
+            }
+
+            OutputStreamWriter(conn.outputStream, "UTF-8").use { writer ->
+                writer.write(jsonPayload)
+                writer.flush()
+            }
+
+            val responseCode = conn.responseCode
+            if (responseCode in 200..299) {
+                println("消息发送成功")
+                return true
+            } else {
+                println("消息发送失败，HTTP状态码: $responseCode")
+                conn.errorStream?.bufferedReader()?.use {
+                    println("错误响应: ${it.readText()}")
+                }
+                return false
+            }
+        } catch (e: Exception) {
+            println("发送消息时出错: ${e.message}")
+            e.printStackTrace()
+            return false
+        }
+    }
+}
+
+// 使用示例
+fun mainUpgradeTest() {
+    val webhookUrl = "\n" +
+            "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=f958b257-788a-47b6-833f-70bce94e24b9"
+    val bot = WechatBot(webhookUrl)
+
+    // 1. 发送简单文本消息
+//    bot.sendTextMessage("这是一条普通文本消息")
+
+    // 2. 发送@特定用户的消息
+//    bot.sendTextMessage(
+//        content = "<@liqishun@hopemobi.com>这是一条@所有人的消息",
+//        mentionedList = listOf("liqishun@hopemobi.com")
+//    )
+
+//    // 3. 发送带高亮的成功消息
+    bot.sendSuccessMessage(
+        title = "部署成功",
+        content = "项目部署完成，服务运行正常",
+        highlightItems = listOf("部署时间: 2024-01-01 10:00:00", "版本: v1.2.3", "环境: 生产环境")
+    )
+//
+//    // 4. 发送带高亮的错误消息
+//    bot.sendErrorMessage(
+//        title = "系统异常",
+//        content = "检测到服务异常，请及时处理",
+//        highlightItems = listOf("错误代码: 500", "服务名称: user-service", "发生时间: 2024-01-01 10:05:00")
+//    )
+//
+    // 5. 发送自定义Markdown消息（支持更复杂的高亮格式）
+    val customMarkdown = """
+        **项目状态报告**
+
+        > **构建状态:** <font color="info">成功</font>
+        > **测试覆盖率:** <font color="warning">85%</font>
+        > **代码质量:** <font color="comment">A级</font>
+
+        **关键指标:**
+        - 性能: ⚡️ <font color="info">优秀</font>
+        - 安全性: 🔒 <font color="warning">良好</font>
+        - 稳定性: 🏗️ <font color="info">优秀</font>
+    """.trimIndent()
+
+    bot.sendMarkdownMessage(customMarkdown)
 }
 //endregion
 
