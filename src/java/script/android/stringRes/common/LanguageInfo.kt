@@ -167,7 +167,7 @@ object LanguageInfo {
 
     private val languageKeyMap = mapOf(
         "阿拉伯语" to "ar-rEG",
-        "爱尔兰语" to "en-rIE",
+        "爱尔兰语" to "ga-rIE",
         "丹麦语" to "da-rDK",
         "德语" to "de-rDE",
         "俄语" to "ru-rRU",
