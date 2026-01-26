@@ -145,24 +145,6 @@ object LanguageInfo {
             }
         }
         return map
-        //德语 - de-rDE
-        //法语 - fr-rFR
-        //韩语 - ko-rKR
-        //荷兰 - nl-rNL
-        //马来语 - ms-rMY
-        //葡萄牙 - pt-rPT
-        //日语 - ja-rJP
-        //泰语 - th-rTH
-        //土耳其语 - tr-rTR
-        //西班牙语 - es-rES
-        //意大利语 - it-rIT
-        //印尼语 - in-rID
-        //英语 - en
-        //越南语 - vi-rVN
-//    "阿拉伯语" to "ar-rEG",
-//    "俄罗斯语" to "ru-rRu",
-        //中文繁体 - zh-rTW
-        //中文简体 - zh-rCN
     }
 
     private val languageKeyMap = mapOf(
@@ -183,6 +165,7 @@ object LanguageInfo {
         "西班牙语" to "es-rES",
         "意大利语" to "it-rIT",
         "印尼语" to "in-rID",
+        "印地语" to "hi-rIN",
         "英文" to "en",
         "越南语" to "vi-rVN",
         "中文繁体" to "zh-rTW",
