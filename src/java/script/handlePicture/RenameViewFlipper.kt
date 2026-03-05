@@ -1,11 +1,11 @@
-package script.android
+package script.handlePicture
 
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
 
 fun main() {
-    val targetFileName = "phtkr_bu_s_000"
+    val targetFileName = "bible_open_book_00"
     val suffixString = ".png"
     var targetIndex = 0
 
