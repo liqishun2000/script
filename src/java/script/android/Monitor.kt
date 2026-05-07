@@ -111,6 +111,7 @@ private fun glanceSnapshot(
         appendLine(" 关键温度:  SKIN ${sensor("SKIN")}  |  AP ${sensor("AP")}  |  BAT ${sensor("BAT")}  |  USB ${sensor("USB")}  |  PA ${sensor("PA1THM")}")
         appendLine(" 电池:      $st  电量 $lvl  上报 $batTemp  ($chargeHint)")
         appendLine(" 性能负载:  1分钟负载≈$load1   CPU(估) $cpuStr   可用内存 $memStr   亮度 $brightness")
+        appendLine(" 负载详情:  ${formatLoadAvgLine(loadavg)}")
         appendLine(" 前台:      ${fg.take(200)}${if (fg.length > 200) "…" else ""}")
         appendLine("<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<")
     }
@@ -187,6 +188,60 @@ private fun parseMemAvailableKb(meminfo: String): Long? =
         ?.split(Regex("\\s+"))
         ?.firstOrNull()
         ?.toLongOrNull()
+
+/** 解读 [loadavg] 一行（/proc/loadavg）：1/5/15 分钟平均负载、可运行/任务总数、最近 PID。 */
+/**
+ * 从 dumpsys 单行里提取 `包名/Activity`（ActivityRecord / Window / ACTIVITY 等格式）。
+ */
+private fun extractForegroundComponentLine(line: String): String? {
+    val t = line.trim()
+    if (t.isEmpty() || t.contains("topResumedActivity=null", ignoreCase = true)) return null
+
+    Regex("""ActivityRecord\{[^\s]+\s+u\d+\s+(\S+/\S+)\s+t\d+""").find(t)?.let { m ->
+        return sanitizeComponentToken(m.groupValues[1])
+    }
+    Regex("""Window\{[^\s]+\s+u\d+\s+(\S+/\S+)""").find(t)?.let { m ->
+        return sanitizeComponentToken(m.groupValues[1])
+    }
+    Regex("""mCurrentFocus=[^u]*u\d+\s+(\S+/\S+)""").find(t)?.let { m ->
+        return sanitizeComponentToken(m.groupValues[1])
+    }
+    Regex("""mFocusedApp[^u]*u\d+\s+(\S+/\S+)""").find(t)?.let { m ->
+        return sanitizeComponentToken(m.groupValues[1])
+    }
+    Regex("""(?i)ACTIVITY\s+(\S+/\S+)\s""").find("$t ")?.let { m ->
+        return sanitizeComponentToken(m.groupValues[1])
+    }
+    return null
+}
+
+private fun sanitizeComponentToken(raw: String): String {
+    var s = raw.trim().trimEnd('}', ')', ']', '"', '\'')
+    val cut = setOf(' ', '}', ')', '+')
+    val end = s.indexOfFirst { it in cut }.let { i -> if (i < 0) s.length else i }
+    s = s.substring(0, end)
+    if (!s.contains('/')) return ""
+    if (s.equals("null/null", ignoreCase = true)) return ""
+    return s
+}
+
+private fun firstForegroundFromDump(text: String): String? =
+    text.lineSequence().mapNotNull { extractForegroundComponentLine(it) }.firstOrNull { it.isNotEmpty() }
+
+private fun formatLoadAvgLine(loadavg: String): String {
+    val parts = loadavg.trim().split(Regex("\\s+"))
+    if (parts.size < 5) {
+        return "原始: ${loadavg.ifEmpty { "(空)" }}"
+    }
+    val l1 = parts[0]
+    val l5 = parts[1]
+    val l15 = parts[2]
+    val runTotal = parts[3].split('/')
+    val run = runTotal.getOrNull(0) ?: "?"
+    val total = runTotal.getOrNull(1) ?: "?"
+    val lastPid = parts[4]
+    return "1分钟=$l1  5分钟=$l5  15分钟=$l15  可运行/任务总数=$run/$total  最近PID=$lastPid"
+}
 
 private fun timestamp(): String =
     LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))
@@ -291,13 +346,22 @@ private class AdbSession(private val serial: String?) {
     }
 
     fun foregroundComponent(): String {
-        val out = shellText(
-            "dumpsys activity activities 2>/dev/null | grep mResumedActivity | tail -n 1"
-        ).trim()
-        if (out.isNotEmpty()) return out
-        return shellText(
-            "dumpsys window windows 2>/dev/null | grep -E 'mCurrentFocus' | tail -n 1"
-        ).trim().ifEmpty { "(未能解析前台组件)" }
+        val sources = listOf(
+            shellText(
+                "dumpsys activity activities 2>/dev/null | grep -iE 'topResumedActivity|mResumedActivity|ResumedActivity' | head -n 24"
+            ),
+            shellText(
+                "dumpsys window 2>/dev/null | grep -iE 'mCurrentFocus|mFocusedApp' | head -n 24"
+            ),
+            shellText(
+                "dumpsys window displays 2>/dev/null | grep -iE 'mCurrentFocus|mFocusedApp' | head -n 24"
+            ),
+            shellText("dumpsys activity top 2>/dev/null | head -n 60"),
+        )
+        for (raw in sources) {
+            firstForegroundFromDump(raw)?.let { return it }
+        }
+        return "(未能解析前台组件)"
     }
 
     /**
