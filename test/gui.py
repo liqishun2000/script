@@ -21,13 +21,15 @@ from pathlib import Path
 from tkinter import messagebox, ttk
 
 if __package__:
-    from . import dead_funds, data_fetcher, market, portfolio, trade_log, watchlist
+    from . import (backtest, dead_funds, data_fetcher, market, portfolio,
+                   trade_log, watchlist)
     from .data_fetcher import FundDataEmpty
     from .indicators import compute_indicators
     from .strategy import evaluate_signals
 else:  # 允许直接 python test/gui.py 运行
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    from test import dead_funds, data_fetcher, market, portfolio, trade_log, watchlist
+    from test import (backtest, dead_funds, data_fetcher, market, portfolio,
+                      trade_log, watchlist)
     from test.data_fetcher import FundDataEmpty
     from test.indicators import compute_indicators
     from test.strategy import evaluate_signals
@@ -48,19 +50,52 @@ _UP_COLOR = "#c0392b"
 _DOWN_COLOR = "#16a085"
 
 
-def _analyze_one_fund(code: str, total_capital: float, with_estimate: bool) -> dict:
+def _append_estimate_point(nav_df, est_dict):
+    """把当日官方估算净值作为临时一行追加到净值序列末尾（供盘中计算指标）。
+
+    仅当估值日期晚于最后一个已确认净值日期时才追加，避免重复。
+    """
+    import pandas as _pd
+    gsz = est_dict.get("gsz")
+    gztime = est_dict.get("gztime")
+    if not gsz or not gztime:
+        return nav_df
+    try:
+        edate = _pd.to_datetime(gztime).normalize()
+    except Exception:
+        return nav_df
+    if len(nav_df) and edate <= nav_df["date"].iloc[-1]:
+        return nav_df
+    row = {"date": edate, "nav": float(gsz), "pct_change": est_dict.get("gszzl")}
+    return _pd.concat([nav_df, _pd.DataFrame([row])], ignore_index=True)
+
+
+def _analyze_one_fund(code: str, total_capital: float, with_estimate: bool,
+                      market: dict | None = None) -> dict:
     """分析单只基金（供线程池调用）。失败的空数据基金会被登记为已清盘。"""
     try:
         nav_df = data_fetcher.fetch_fund_nav(code)
-        ind = compute_indicators(nav_df)
-        name = data_fetcher.fetch_fund_name(code)
-        report = evaluate_signals(ind, code, name)
-        adv = portfolio.advise(report, total_capital)
         est = None
         if with_estimate:
             e = data_fetcher.fetch_fund_estimate(code)
             if e:
                 est = {"estimate_pct": e["gszzl"], "time": e.get("gztime", "")}
+                # 把当日估算净值计入指标计算，使信号反映盘中行情
+                nav_df = _append_estimate_point(nav_df, e)
+
+        ind = compute_indicators(nav_df)
+        name = data_fetcher.fetch_fund_name(code)
+
+        # 大盘/全球情绪：仅对权益类基金叠加
+        mkt_score = None
+        mkt_detail = ""
+        if market is not None and data_fetcher.is_equity_fund(code):
+            mkt_score = market.get("score")
+            mkt_detail = market.get("detail", "")
+
+        report = evaluate_signals(ind, code, name,
+                                  market_score=mkt_score, market_detail=mkt_detail)
+        adv = portfolio.advise(report, total_capital)
         last = trade_log.last_trade(code)
         return {"code": code, "report": report, "adv": adv,
                 "est": est, "last": last, "error": None}
@@ -115,6 +150,7 @@ class FundApp(tk.Tk):
         self._build_home_tab()
         self._build_analysis_tab()
         self._build_allfunds_tab()
+        self._build_backtest_tab()
         self._build_holdings_tab()
         self._build_trades_tab()
         self._build_capital_tab()
@@ -398,6 +434,10 @@ class FundApp(tk.Tk):
 
     def _score_all_worker(self, codes) -> None:
         data_fetcher.fetch_fund_name("000001")  # 预热名称缓存，避免并发冷启动
+        try:
+            mkt = market.market_sentiment()
+        except Exception:
+            mkt = None
         total = len(codes)
         counter = {"done": 0}
 
@@ -405,7 +445,11 @@ class FundApp(tk.Tk):
             try:
                 nav_df = data_fetcher.fetch_fund_nav(code)
                 ind = compute_indicators(nav_df)
-                report = evaluate_signals(ind, code, data_fetcher.fetch_fund_name(code))
+                mkt_score = None
+                if mkt is not None and data_fetcher.is_equity_fund(code):
+                    mkt_score = mkt.get("score")
+                report = evaluate_signals(ind, code, data_fetcher.fetch_fund_name(code),
+                                          market_score=mkt_score)
                 return item, report.composite_score, report.action
             except FundDataEmpty:
                 dead_funds.mark_dead(code, "无净值数据")
@@ -462,6 +506,122 @@ class FundApp(tk.Tk):
         vals = self.all_tree.item(item, "values")
         if vals:
             self.open_detail(vals[0])
+
+    # ---- Tab: 回测 ---------------------------------------------------- #
+    def _build_backtest_tab(self) -> None:
+        tab = ttk.Frame(self.nb)
+        self.nb.add(tab, text="  回测  ")
+
+        top = ttk.Frame(tab)
+        top.pack(fill="x", padx=8, pady=6)
+        ttk.Label(top, text="回测天数:").pack(side="left")
+        self.bt_days_var = tk.IntVar(value=180)
+        ttk.Spinbox(top, from_=30, to=180, increment=10, width=5,
+                    textvariable=self.bt_days_var).pack(side="left", padx=2)
+        ttk.Label(top, text="(最大半年=180)").pack(side="left")
+        ttk.Label(top, text="  前瞻判定日:").pack(side="left")
+        self.bt_fwd_var = tk.IntVar(value=5)
+        ttk.Spinbox(top, from_=1, to=30, width=4,
+                    textvariable=self.bt_fwd_var).pack(side="left", padx=2)
+        self.bt_run_btn = ttk.Button(top, text="开始回测(选中)", command=self._on_run_backtest)
+        self.bt_run_btn.pack(side="left", padx=10)
+
+        body = ttk.Frame(tab)
+        body.pack(fill="both", expand=True, padx=8, pady=4)
+
+        # 左侧：多选基金
+        left = ttk.Frame(body)
+        left.pack(side="left", fill="y")
+        ttk.Label(left, text="选择基金(可多选)", style="Title.TLabel").pack(anchor="w")
+        self.bt_list = tk.Listbox(left, width=14, height=18, selectmode="extended",
+                                  exportselection=False)
+        self.bt_list.pack(fill="y", expand=True, pady=2)
+        add = ttk.Frame(left)
+        add.pack(fill="x")
+        self.bt_add_var = tk.StringVar()
+        ttk.Entry(add, textvariable=self.bt_add_var, width=8).pack(side="left")
+        ttk.Button(add, text="加入", width=5, command=self._on_bt_add).pack(side="left", padx=2)
+        ttk.Button(left, text="全选", command=lambda: self.bt_list.select_set(0, tk.END)).pack(
+            fill="x", pady=2)
+
+        # 右侧：结果表
+        right = ttk.Frame(body)
+        right.pack(side="left", fill="both", expand=True, padx=(8, 0))
+        cols = ("code", "name", "period", "strat", "bench", "excess", "dd", "sig", "win", "beat")
+        headers = {"code": "代码", "name": "名称", "period": "区间起",
+                   "strat": "策略%", "bench": "持有%", "excess": "超额%",
+                   "dd": "回撤%", "sig": "信号数", "win": "胜率", "beat": "跑赢"}
+        widths = {"code": 56, "name": 130, "period": 90, "strat": 64, "bench": 64,
+                  "excess": 64, "dd": 60, "sig": 56, "win": 56, "beat": 50}
+        self.bt_tree = ttk.Treeview(right, columns=cols, show="headings", height=15)
+        for c in cols:
+            self.bt_tree.heading(c, text=headers[c])
+            self.bt_tree.column(c, width=widths[c], anchor="center")
+        self.bt_tree.column("name", anchor="w")
+        self.bt_tree.pack(side="left", fill="both", expand=True)
+        vs = ttk.Scrollbar(right, orient="vertical", command=self.bt_tree.yview)
+        vs.pack(side="left", fill="y")
+        self.bt_tree.configure(yscrollcommand=vs.set)
+        self.bt_tree.tag_configure("pos", foreground=_UP_COLOR)
+        self.bt_tree.tag_configure("neg", foreground=_DOWN_COLOR)
+
+        self.bt_summary = tk.StringVar(
+            value="选择基金后点击「开始回测」。回测按每日推荐操作模拟调仓，无未来函数。")
+        ttk.Label(tab, textvariable=self.bt_summary, style="Title.TLabel",
+                  wraplength=1000, justify="left").pack(anchor="w", padx=10, pady=6)
+
+        self._refresh_bt_list()
+
+    def _refresh_bt_list(self) -> None:
+        self.bt_list.delete(0, tk.END)
+        for code in watchlist.get_watchlist():
+            self.bt_list.insert(tk.END, code)
+
+    def _on_bt_add(self) -> None:
+        code = self.bt_add_var.get().strip()
+        if not code:
+            return
+        watchlist.add_fund(code)
+        self.bt_add_var.set("")
+        self._refresh_bt_list()
+        self._refresh_watchlist_box()
+
+    def _on_run_backtest(self) -> None:
+        sel = self.bt_list.curselection()
+        codes = [self.bt_list.get(i) for i in sel] or list(self.bt_list.get(0, tk.END))
+        if not codes:
+            messagebox.showinfo("提示", "请先添加并选择基金。")
+            return
+        for item in self.bt_tree.get_children():
+            self.bt_tree.delete(item)
+        days = int(self.bt_days_var.get())
+        fwd = int(self.bt_fwd_var.get())
+        self.bt_run_btn.config(state="disabled")
+        self.bt_summary.set(f"回测中…（{len(codes)} 只，{days} 天）")
+        self._run_async(backtest.backtest_many, self._on_backtest_done, codes, days, fwd)
+
+    def _on_backtest_done(self, out) -> None:
+        self.bt_run_btn.config(state="normal")
+        for r in out["results"]:
+            if r.error:
+                self.bt_tree.insert("", tk.END, values=(
+                    r.code, r.name[:8], "失败", "-", "-", "-", "-", "-", "-", r.error[:6]))
+                continue
+            wr = f"{r.win_rate*100:.0f}%" if r.win_rate is not None else "-"
+            tag = "pos" if r.strategy_return >= 0 else "neg"
+            self.bt_tree.insert("", tk.END, values=(
+                r.code, r.name[:8], r.start_date,
+                f"{r.strategy_return*100:+.1f}", f"{r.benchmark_return*100:+.1f}",
+                f"{r.excess_return*100:+.1f}", f"{r.max_drawdown*100:.1f}",
+                r.n_signals, wr, "是" if r.beat_benchmark else "否"), tags=(tag,))
+        ow = out["overall_win_rate"]
+        br = out["beat_benchmark_ratio"]
+        ow_s = f"{ow*100:.1f}%" if ow is not None else "-"
+        br_s = f"{br*100:.0f}%" if br is not None else "-"
+        self.bt_summary.set(
+            f"回测完成：{out['n_funds']} 只 | 总信号 {out['total_signals']} 个 | "
+            f"★ 总体信号胜率 {ow_s}（前瞻 {self.bt_fwd_var.get()} 日方向准确率） | "
+            f"跑赢买入持有 {br_s}")
 
     # ---- Tab 2: 持仓估值 ---------------------------------------------- #
     def _build_holdings_tab(self) -> None:
@@ -654,10 +814,14 @@ class FundApp(tk.Tk):
     def _analyze_funds(codes, with_estimate):
         data_fetcher.fetch_fund_name("000001")  # 预热名称缓存，避免并发冷启动
         total_capital = portfolio.get_total_capital()
+        try:
+            mkt = market.market_sentiment()
+        except Exception:
+            mkt = None
         result_map = {}
         with ThreadPoolExecutor(max_workers=_MAX_WORKERS) as ex:
             futs = {
-                ex.submit(_analyze_one_fund, code, total_capital, with_estimate): code
+                ex.submit(_analyze_one_fund, code, total_capital, with_estimate, mkt): code
                 for code in codes
             }
             for fut in as_completed(futs):

@@ -8,7 +8,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import List
+from typing import List, Optional
 
 import numpy as np
 import pandas as pd
@@ -38,6 +38,8 @@ class SignalReport:
     osc_score: float = 0.0           # 超买超卖原始分量 (-2~2，正=超卖看多)
     osc_adjusted: float = 0.0        # 经趋势调节后的超买超卖分量
     regime: str = ""                 # 趋势状态描述
+    market_score: Optional[float] = None   # 大盘/全球情绪修正分量 (-2~2)
+    market_detail: str = ""          # 大盘情绪说明
 
     def to_text(self) -> str:
         sep = "-" * 60
@@ -62,6 +64,10 @@ class SignalReport:
         lines.append(
             f"  超买超卖   : 原始 {self.osc_score:+.2f} → 调节后 {self.osc_adjusted:+.2f}"
         )
+        if self.market_score is not None:
+            lines.append(
+                f"  大盘/全球  : {self.market_score:+.2f}  ({self.market_detail})"
+            )
         lines.append(sep)
         return "\n".join(lines)
 
@@ -292,12 +298,22 @@ def _score_to_action(score: float) -> str:
     return "观望"
 
 
+# 大盘/全球情绪在最终评分中的权重（个基技术面占主导，大盘作为环境修正）
+_MARKET_WEIGHT = 0.15
+
+
 def evaluate_signals(
     indicator_df: pd.DataFrame,
     fund_code: str,
     fund_name: str,
+    market_score: Optional[float] = None,
+    market_detail: str = "",
 ) -> SignalReport:
-    """根据带指标的 DataFrame 输出当日的买卖信号报告。"""
+    """根据带指标的 DataFrame 输出当日的买卖信号报告。
+
+    market_score: 可选的大盘/全球情绪分 (-2~2)。传入后会以 _MARKET_WEIGHT
+    的权重与个基技术评分融合（仅建议对权益类基金传入）。
+    """
     if len(indicator_df) < 2:
         raise ValueError("数据点不足，无法生成信号。")
 
@@ -348,6 +364,11 @@ def evaluate_signals(
     final = (_GROUP_W["trend"] * trend
              + _GROUP_W["momentum"] * momentum
              + _GROUP_W["osc"] * osc_adj)
+
+    # 融入大盘/全球情绪（系统性环境修正）
+    if market_score is not None:
+        final = (1 - _MARKET_WEIGHT) * final + _MARKET_WEIGHT * float(market_score)
+
     composite = float(np.clip(final, -2, 2) * 5)
 
     day_change = latest.get("pct_change")
@@ -368,4 +389,6 @@ def evaluate_signals(
         osc_score=round(osc, 3),
         osc_adjusted=round(osc_adj, 3),
         regime=regime,
+        market_score=round(market_score, 3) if market_score is not None else None,
+        market_detail=market_detail,
     )

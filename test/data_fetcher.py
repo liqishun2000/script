@@ -101,6 +101,28 @@ def _build_fund_name_table() -> pd.DataFrame:
     return table[["code", "name", "type"]].drop_duplicates("code")
 
 
+def fetch_fund_type(fund_code: str) -> str:
+    """返回基金类型字符串（如 '混合型-偏股'），找不到返回空串。"""
+    try:
+        table = _fund_name_table()
+        hit = table.loc[table["code"] == str(fund_code).zfill(6), "type"]
+        if not hit.empty:
+            return str(hit.iloc[0])
+    except Exception:
+        pass
+    return ""
+
+
+# 权益类（与大盘相关性高）：股票/混合/指数/QDII；债券/货币/商品 不计大盘因子
+_EQUITY_PREFIXES = ("股票", "混合", "指数", "QDII")
+
+
+def is_equity_fund(fund_code: str) -> bool:
+    """判断是否为权益类基金（用于决定是否叠加大盘/全球情绪因子）。"""
+    t = fetch_fund_type(fund_code)
+    return any(t.startswith(p) for p in _EQUITY_PREFIXES)
+
+
 def fetch_fund_name(fund_code: str) -> str:
     """根据基金代码返回基金中文简称，找不到则回退为代码本身。"""
     try:

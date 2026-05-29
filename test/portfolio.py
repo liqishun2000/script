@@ -105,32 +105,52 @@ def advise(report: SignalReport, total_capital: Optional[float] = None) -> Posit
 
     target_ratio = min(target_ratio, _MAX_SINGLE_RATIO)
     target_val = total_capital * target_ratio
-    diff = target_val - cur_val
 
-    if abs(diff) < _MIN_TRADE_AMOUNT:
-        suggest_action = "维持"
-        amount = 0.0
-        reason = (
-            f"当前仓位({cur_ratio:.1%})已接近目标({target_ratio:.1%})，无需调整。"
-        )
-    elif diff > 0:
-        suggest_action = "加仓"
-        amount = diff
-        reason = (
-            f"信号「{report.action}」目标仓位{target_ratio:.1%}，"
-            f"当前{cur_ratio:.1%}，建议加仓 {amount:,.0f} 元。"
-        )
-    else:
-        amount = -diff
-        if target_ratio == 0.0:
-            suggest_action = "清仓"
-            reason = f"信号「{report.action}」，建议清仓，卖出约 {amount:,.0f} 元。"
-        else:
-            suggest_action = "减仓"
+    # —— 方向感知：买入信号只会加仓，卖出信号只会减/清仓，绝不反向 ——
+    if report.action in ("买入", "强烈买入"):
+        diff = target_val - cur_val
+        if diff > _MIN_TRADE_AMOUNT:
+            suggest_action = "加仓"
+            amount = diff
             reason = (
-                f"信号「{report.action}」目标仓位{target_ratio:.1%}，"
-                f"当前{cur_ratio:.1%}，建议减仓 {amount:,.0f} 元。"
+                f"信号「{report.action}」，目标仓位{target_ratio:.1%}，"
+                f"当前{cur_ratio:.1%}，建议加仓 {amount:,.0f} 元。"
             )
+        else:
+            suggest_action = "维持"
+            amount = 0.0
+            reason = (
+                f"信号「{report.action}」，但当前仓位({cur_ratio:.1%})"
+                f"已达目标({target_ratio:.1%})，建议维持。"
+            )
+    else:  # 卖出 / 强烈卖出：只考虑减仓或清仓，空仓时观望不买
+        if cur_val <= _MIN_TRADE_AMOUNT:
+            suggest_action = "维持"
+            amount = 0.0
+            reason = (
+                f"信号「{report.action}」，且当前基本无持仓，"
+                f"建议空仓观望，不宜买入。"
+            )
+        else:
+            diff = cur_val - target_val
+            if diff <= _MIN_TRADE_AMOUNT:
+                suggest_action = "维持"
+                amount = 0.0
+                reason = (
+                    f"信号「{report.action}」，当前仓位({cur_ratio:.1%})"
+                    f"已不高于目标({target_ratio:.1%})，可维持观望。"
+                )
+            elif target_ratio == 0.0:
+                suggest_action = "清仓"
+                amount = cur_val
+                reason = f"信号「{report.action}」，建议清仓，卖出约 {amount:,.0f} 元。"
+            else:
+                suggest_action = "减仓"
+                amount = diff
+                reason = (
+                    f"信号「{report.action}」，目标仓位{target_ratio:.1%}，"
+                    f"当前{cur_ratio:.1%}，建议减仓 {amount:,.0f} 元。"
+                )
 
     return PositionAdvice(
         fund_code=report.fund_code,
