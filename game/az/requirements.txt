@@ -1,0 +1,3 @@
+# AlphaZero-lite 训练所需依赖
+torch>=2.2
+numpy>=1.24
