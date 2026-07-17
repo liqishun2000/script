@@ -26,13 +26,13 @@ if __package__:
     from .data_fetcher import FundDataEmpty
     from .indicators import compute_indicators
     from .strategy import evaluate_signals
-else:  # 允许直接 python test/gui.py 运行
+else:  # 允许直接 python funds/gui.py 运行
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    from test import (backtest, dead_funds, data_fetcher, market, portfolio,
-                      trade_log, watchlist)
-    from test.data_fetcher import FundDataEmpty
-    from test.indicators import compute_indicators
-    from test.strategy import evaluate_signals
+    from funds import (backtest, dead_funds, data_fetcher, market, portfolio,
+                       trade_log, watchlist)
+    from funds.data_fetcher import FundDataEmpty
+    from funds.indicators import compute_indicators
+    from funds.strategy import evaluate_signals
 
 # 并发线程数：东财接口并发过高会限流，6~8 较稳妥
 _MAX_WORKERS = 8

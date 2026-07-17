@@ -7,7 +7,7 @@
 ## 模块结构
 
 ```
-test/
+funds/
 ├── __init__.py
 ├── data_fetcher.py   # akshare 获取：净值/名称/持仓/单股实时行情/基金当日估算涨跌
 ├── indicators.py     # MA / MACD / RSI / 布林带 / KDJ 计算
@@ -23,7 +23,7 @@ test/
 ## 图形界面（推荐）
 
 ```bash
-python -m test.gui
+python -m funds.gui
 ```
 
 四个功能页：
@@ -33,7 +33,7 @@ python -m test.gui
 3. **交易记录**：录入每日实际买/卖操作（自动按净值折算份额），自动汇总持仓，用于复盘与后续决策。
 4. **资金设置**：设置总仓位金额，查看整体投入/现金占比。
 
-> 用户数据（自选、持仓、交易、总资金）保存在 `test/data/` 下的 JSON 文件中，跨会话保留。
+> 用户数据（自选、持仓、交易、总资金）保存在 `funds/data/` 下的 JSON 文件中，跨会话保留。
 
 ## 命令行
 
@@ -41,22 +41,22 @@ python -m test.gui
 
 ```bash
 # 分析默认示例基金（华夏成长、易方达消费、新华优选成长）
-python -m test.fund_analyzer
+python -m funds.fund_analyzer
 
 # 分析指定基金（可一次传入多只）
-python -m test.fund_analyzer 000001 110022 519066
+python -m funds.fund_analyzer 000001 110022 519066
 ```
 
 ## 关于「分析所有基金」
 
 全市场公募基金数量过万，逐一联网分析不现实（耗时以小时计且易触发限流）。
 因此本工具采用**自选清单**模式：在「信号分析」页把关注的基金加入清单后批量分析。
-如需检索全市场基金代码，可调用 `test.list_all_funds()`。
+如需检索全市场基金代码，可调用 `funds.list_all_funds()`。
 
 也可以在代码中直接调用：
 
 ```python
-from test import fetch_fund_nav, compute_indicators, evaluate_signals, fetch_fund_name
+from funds import fetch_fund_nav, compute_indicators, evaluate_signals, fetch_fund_name
 
 nav = fetch_fund_nav("000001")
 ind = compute_indicators(nav)

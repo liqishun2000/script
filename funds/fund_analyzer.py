@@ -1,8 +1,8 @@
 """命令行入口：拉取国内基金数据 -> 计算指标 -> 输出当日买卖建议。
 
 用法示例:
-    python -m test.fund_analyzer 000001 110022 519066
-    python -m test.fund_analyzer            # 不传参时使用默认示例基金
+    python -m funds.fund_analyzer 000001 110022 519066
+    python -m funds.fund_analyzer            # 不传参时使用默认示例基金
 """
 
 from __future__ import annotations
@@ -13,17 +13,17 @@ from pathlib import Path
 from typing import Iterable, List
 
 # 同时兼容两种运行方式：
-#   1) python -m test.fund_analyzer  (作为包模块运行，使用相对导入)
-#   2) python test/fund_analyzer.py  (作为脚本运行，回退到绝对导入)
+#   1) python -m funds.fund_analyzer  (作为包模块运行，使用相对导入)
+#   2) python funds/fund_analyzer.py  (作为脚本运行，回退到绝对导入)
 if __package__:
     from .data_fetcher import fetch_fund_nav, fetch_fund_name
     from .indicators import compute_indicators
     from .strategy import SignalReport, evaluate_signals
 else:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    from test.data_fetcher import fetch_fund_nav, fetch_fund_name
-    from test.indicators import compute_indicators
-    from test.strategy import SignalReport, evaluate_signals
+    from funds.data_fetcher import fetch_fund_nav, fetch_fund_name
+    from funds.indicators import compute_indicators
+    from funds.strategy import SignalReport, evaluate_signals
 
 
 DEFAULT_FUNDS: List[str] = ["000001", "110022", "519066"]
