@@ -1,124 +1,183 @@
 # -*- coding: utf-8 -*-
-"""
-积存金实时价格监控（网格交易提醒，含手续费核算）
-
-数据源：京东金融积存金实时价（主），新浪 Au(T+D) 行情（备用）
-通知：企业微信群机器人 webhook（推荐）/ Server酱（微信公众号推送，可选）
-
-交易逻辑（考虑手续费）：
-  - 买入：价格每比参考价（上次买入价，空仓时为锚点价）下跌 GRID_STEP_PCT，
-    提示买入一份，并记录为一笔持仓（记入 state.json）。
-  - 卖出：对每笔持仓单独核算，只有当前价扣除卖出手续费后 >= 买入成本(含买入手续费)
-    再加 MIN_PROFIT_RATE 净利润时，才提示卖出该笔。绝不推送亏手续费的卖出。
-  - 空仓时锚点价跟随价格上移（只涨不跌），保证高位回落也能触发买入。
-  - 推送后默认你已按提示操作；如实际没操作，改 state.json 里的 lots 即可。
-
-用法：
-    python gold_monitor.py              # 前台运行监控，Ctrl+C 退出
-    python gold_monitor.py --test       # 发一条测试通知后退出
-    python gold_monitor.py status       # 查看当前持仓与触发价
-    python gold_monitor.py bought 899.5 # 记录实际买入 1 份 @899.5（可加份数：bought 899.5 2）
-    python gold_monitor.py sold 899.5   # 移除该笔持仓（已卖出或当初没买）
-    python gold_monitor.py sold all     # 移除全部持仓
-    python gold_monitor.py clear        # 清空持仓并重置锚点
-
-持仓同步命令在监控运行时可直接用（另开一个终端执行即可），
-监控进程会自动检测 state.json 的修改并热重载，操作确认会推送到群里。
-"""
+"""积存金实时价格监控（网格交易提醒，含手续费核算）。"""
 
 import argparse
 import json
+import logging
+import math
+import msvcrt
+import os
 import re
+import shutil
 import sys
 import time
+import traceback
+from contextlib import contextmanager
 from datetime import datetime
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
-# ============================ 配置区 ============================
 
-# 手续费率（按你银行/平台的实际费率改，工行积存金卖出约 0.5%）
-BUY_FEE_RATE = 0.000    # 买入手续费率；若你的平台买入免手续费，改为 0.0
-SELL_FEE_RATE = 0.005   # 卖出/赎回手续费率
+BASE_DIR = Path(__file__).resolve().parent
+STATE_FILE = BASE_DIR / "state.json"
+STATE_BACKUP_FILE = BASE_DIR / "state.json.bak"
+STATE_LOCK_FILE = BASE_DIR / "state.json.lock"
+LOG_FILE = BASE_DIR / "gold_monitor.log"
 
-# 每格要求的最少净利润率（扣完双边手续费之后）
-MIN_PROFIT_RATE = 0.01  # 1%
-
-# 买入网格步长（百分比）。价格每下跌一格提示加买一份。
-# 注意：必须明显大于 0，通常应 >= 双边手续费 + 净利润要求，否则格子太密不划算
-GRID_STEP_PCT = 0.012    # 1.2%
-
-# 每份克数（仅用于消息里估算盈亏金额，不影响信号）
-LOT_GRAMS = 2
-
-# 最大持仓份数：跌破上限后不再提示加仓，防止单边下跌无限补仓
-MAX_LOTS = 10
-
-# 轮询间隔（秒）
-POLL_INTERVAL = 30
-
-# 企业微信群机器人 webhook（推荐）。
-# 获取方式：企业微信建一个群 -> 群设置 -> 群机器人 -> 添加 -> 复制 webhook 地址
-WECOM_WEBHOOK = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=dfd6e537-8680-4f15-9262-dcf9485fba30"
-
-# Server酱 SendKey（可选，推送到微信）。https://sct.ftqq.com 扫码获取
-SERVERCHAN_SENDKEY = ""
-
-# ===============================================================
-
-STATE_FILE = Path(__file__).with_name("state.json")
 JD_URL = "https://ms.jr.jd.com/gw/generic/hj/h5/m/latestPrice"
 SINA_URL = "https://hq.sinajs.cn/list=gds_AUTD"
 
-if hasattr(sys.stdout, "reconfigure"):
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-session = requests.Session()
-session.headers.update({"User-Agent": "Mozilla/5.0"})
+# ============================ 配置区 ============================
+# 直接修改本区即可。比例使用小数，例如 0.012 表示 1.2%。
+
+# 手续费与交易策略
+BUY_FEE_RATE = 0.0       # 买入手续费率
+SELL_FEE_RATE = 0.005    # 卖出/赎回手续费率，0.5%
+MIN_PROFIT_RATE = 0.01   # 扣除手续费后的最低净利润率，1%
+GRID_STEP_PCT = 0.012    # 买入网格间距，1.2%
+LOT_GRAMS = 2            # 每份克数，仅用于估算通知中的利润金额
+MAX_LOTS = 10            # 最大持仓份数
+
+# 运行与日志
+POLL_INTERVAL = 30       # 正常行情轮询间隔，单位：秒
+MAX_BACKOFF = 900        # 连续取价失败时的最大重试间隔，单位：秒
+HEARTBEAT_TICKS = 10     # 每成功轮询多少次写一条正常心跳日志；10 * 30 秒 = 5 分钟
+
+# 通知渠道
+WECOM_WEBHOOK = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=dfd6e537-8680-4f15-9262-dcf9485fba30"
+SERVERCHAN_SENDKEY = ""  # 可选；不使用 Server酱时留空
+
+# ===============================================================
+
+if BUY_FEE_RATE + SELL_FEE_RATE + MIN_PROFIT_RATE >= 1:
+    raise ValueError("手续费率与利润率配置不合理")
+if not 0 <= BUY_FEE_RATE <= 0.5:
+    raise ValueError("BUY_FEE_RATE 必须在 0 到 0.5 之间")
+if not 0 <= SELL_FEE_RATE <= 0.5:
+    raise ValueError("SELL_FEE_RATE 必须在 0 到 0.5 之间")
+if not 0 <= MIN_PROFIT_RATE <= 10:
+    raise ValueError("MIN_PROFIT_RATE 必须在 0 到 10 之间")
+if not 0 < GRID_STEP_PCT < 1:
+    raise ValueError("GRID_STEP_PCT 必须在 0 到 1 之间")
+if LOT_GRAMS <= 0 or MAX_LOTS <= 0:
+    raise ValueError("LOT_GRAMS 和 MAX_LOTS 必须大于 0")
+if POLL_INTERVAL < 5 or MAX_BACKOFF < POLL_INTERVAL or HEARTBEAT_TICKS < 1:
+    raise ValueError("轮询、退避或心跳参数不合理")
 
 
-LOG_FILE = Path(__file__).with_name("gold_monitor.log")
+def _build_logger():
+    logger = logging.getLogger("gold_monitor")
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+    if logger.handlers:
+        return logger
+
+    formatter = logging.Formatter("[%(asctime)s] %(message)s", "%Y-%m-%d %H:%M:%S")
+    file_handler = RotatingFileHandler(
+        LOG_FILE,
+        maxBytes=5 * 1024 * 1024,
+        backupCount=3,
+        encoding="utf-8",
+    )
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
+
+    if sys.stdout is not None:
+        if hasattr(sys.stdout, "reconfigure"):
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        stream_handler = logging.StreamHandler(sys.stdout)
+        stream_handler.setFormatter(formatter)
+        logger.addHandler(stream_handler)
+    return logger
+
+
+logger = _build_logger()
 
 
 def log(msg):
-    line = f"[{datetime.now():%Y-%m-%d %H:%M:%S}] {msg}"
-    print(line, flush=True)
+    logger.info(msg)
+
+
+def _build_session():
+    result = requests.Session()
+    result.headers.update({"User-Agent": "Mozilla/5.0 (GoldMonitor/1.1)"})
+    retry = Retry(
+        total=2,
+        connect=2,
+        read=2,
+        status=2,
+        backoff_factor=0.5,
+        status_forcelist=(429, 500, 502, 503, 504),
+        allowed_methods=frozenset({"GET", "HEAD"}),
+        raise_on_status=False,
+    )
+    result.mount("https://", HTTPAdapter(max_retries=retry))
+    return result
+
+
+session = _build_session()
+
+
+def _valid_price(value, source, field):
     try:
-        if LOG_FILE.exists() and LOG_FILE.stat().st_size > 5 * 1024 * 1024:
-            LOG_FILE.unlink()  # 超过 5MB 直接重开，避免无限膨胀
-        with LOG_FILE.open("a", encoding="utf-8") as f:
-            f.write(line + "\n")
-    except OSError:
-        pass
+        price = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{source} 的 {field} 不是有效数字: {value!r}") from exc
+    if not math.isfinite(price) or not 100 <= price <= 5000:
+        raise ValueError(f"{source} 的 {field} 超出合理范围: {price!r}")
+    return price
 
 
 def fetch_price_jd():
-    """京东金融积存金实时价，返回 (价格, 昨收) 元/克"""
-    resp = session.get(JD_URL, headers={"Referer": "https://m.jr.jd.com/"}, timeout=10)
-    datas = resp.json()["resultData"]["datas"]
-    return float(datas["price"]), float(datas["yesterdayPrice"])
+    """京东金融积存金实时价，返回 (价格, 昨收) 元/克。"""
+    resp = session.get(JD_URL, headers={"Referer": "https://m.jr.jd.com/"}, timeout=(5, 10))
+    resp.raise_for_status()
+    payload = resp.json()
+    datas = payload.get("resultData", {}).get("datas")
+    if not isinstance(datas, dict):
+        raise ValueError("京东响应缺少 resultData.datas")
+    return (
+        _valid_price(datas.get("price"), "京东", "price"),
+        _valid_price(datas.get("yesterdayPrice"), "京东", "yesterdayPrice"),
+    )
 
 
 def fetch_price_sina():
-    """新浪 Au(T+D) 行情备用源，返回 (最新价, 昨收) 元/克"""
-    resp = session.get(SINA_URL, headers={"Referer": "https://finance.sina.com.cn"}, timeout=10)
-    m = re.search(r'"([^"]+)"', resp.text)
-    fields = m.group(1).split(",")
-    return float(fields[0]), float(fields[7])
+    """新浪 Au(T+D) 行情备用源，返回 (最新价, 昨收) 元/克。"""
+    resp = session.get(SINA_URL, headers={"Referer": "https://finance.sina.com.cn"}, timeout=(5, 10))
+    resp.raise_for_status()
+    resp.encoding = "gbk"
+    match = re.search(r'"([^"]+)"', resp.text)
+    if not match:
+        raise ValueError("新浪响应格式异常：未找到行情字段")
+    fields = match.group(1).split(",")
+    if len(fields) <= 7:
+        raise ValueError(f"新浪响应字段不足: {len(fields)}")
+    return (
+        _valid_price(fields[0], "新浪", "latest"),
+        _valid_price(fields[7], "新浪", "yesterday"),
+    )
 
 
 def fetch_price():
     try:
-        return fetch_price_jd()
-    except Exception as e:
-        log(f"京东接口失败({e})，切换新浪备用源")
-        return fetch_price_sina()
+        price, yesterday = fetch_price_jd()
+        return price, yesterday, "京东"
+    except Exception as exc:
+        log(f"京东接口失败({exc})，切换新浪备用源")
+        price, yesterday = fetch_price_sina()
+        return price, yesterday, "新浪"
 
 
 def notify_wecom(title, content):
     body = {"msgtype": "markdown", "markdown": {"content": f"**{title}**\n{content}"}}
-    resp = session.post(WECOM_WEBHOOK, json=body, timeout=10)
+    resp = session.post(WECOM_WEBHOOK, json=body, timeout=(5, 10))
+    resp.raise_for_status()
     result = resp.json()
     if result.get("errcode") != 0:
         raise RuntimeError(f"企业微信返回错误: {result}")
@@ -126,80 +185,74 @@ def notify_wecom(title, content):
 
 def notify_serverchan(title, content):
     url = f"https://sctapi.ftqq.com/{SERVERCHAN_SENDKEY}.send"
-    resp = session.post(url, data={"title": title, "desp": content}, timeout=10)
+    resp = session.post(url, data={"title": title, "desp": content}, timeout=(5, 10))
+    resp.raise_for_status()
     result = resp.json()
     if result.get("code") != 0:
         raise RuntimeError(f"Server酱返回错误: {result}")
 
 
 def notify(title, content):
+    configured = False
     sent = False
-    for name, key, func in [
+    for name, key, func in (
         ("企业微信", WECOM_WEBHOOK, notify_wecom),
         ("Server酱", SERVERCHAN_SENDKEY, notify_serverchan),
-    ]:
+    ):
         if not key:
             continue
+        configured = True
         try:
             func(title, content)
             sent = True
             log(f"{name}通知已发送: {title}")
-        except Exception as e:
-            log(f"{name}通知发送失败: {e}")
-    if not sent:
+        except Exception as exc:
+            logger.exception("%s通知发送失败: %s", name, exc)
+    if not configured:
         log(f"(未配置通知渠道) {title} | {content}")
+    return sent
 
-
-# ---------------------- 手续费核算 ----------------------
 
 def buy_cost(buy_price):
-    """每克实际成本 = 买入价 * (1 + 买入费率)"""
     return buy_price * (1 + BUY_FEE_RATE)
 
 
 def breakeven_price(lot_price):
-    """回本价：卖出扣费后刚好等于买入成本的价格"""
     return buy_cost(lot_price) / (1 - SELL_FEE_RATE)
 
 
 def sell_target(lot_price):
-    """目标卖出价：回本之外再赚 MIN_PROFIT_RATE 净利润"""
     return buy_cost(lot_price) * (1 + MIN_PROFIT_RATE) / (1 - SELL_FEE_RATE)
 
 
 def net_profit_per_gram(lot_price, sell_price):
-    """每克净利润 = 卖出净得 - 买入成本"""
     return sell_price * (1 - SELL_FEE_RATE) - buy_cost(lot_price)
 
 
-# ---------------------- 网格决策 ----------------------
-
 def process_tick(price, state):
-    """根据当前价更新持仓状态，返回要推送的 (标题, 内容) 列表"""
+    """根据当前价更新状态，返回需要发送的 (标题, 内容) 列表。"""
+    price = _valid_price(price, "行情", "price")
     msgs = []
     lots = state.setdefault("lots", [])
 
-    # 空仓时锚点跟随价格上移，高位回落一格即可触发首次买入
-    if not lots:
-        if state.get("anchor") is None or price > state["anchor"]:
-            state["anchor"] = price
+    if not lots and (state.get("anchor") is None or price > state["anchor"]):
+        state["anchor"] = price
 
-    # ---- 卖出信号：逐笔核算，扣费后有净利润才提示 ----
     sellable = [lot for lot in lots if price >= sell_target(lot["price"])]
     if sellable:
         lines = []
         total_profit = 0.0
         for lot in sellable:
-            p = net_profit_per_gram(lot["price"], price)
-            total_profit += p * LOT_GRAMS
+            profit = net_profit_per_gram(lot["price"], price)
+            total_profit += profit * LOT_GRAMS
             lines.append(
-                f"> 买入价 {lot['price']:.2f} → 现价卖出净赚 {p:.2f} 元/克"
-                f"（{LOT_GRAMS} 克约 {p * LOT_GRAMS:.1f} 元）"
+                f"> 买入价 {lot['price']:.2f} → 现价卖出净赚 {profit:.2f} 元/克"
+                f"（{LOT_GRAMS:g} 克约 {profit * LOT_GRAMS:.1f} 元）"
             )
         state["lots"] = [lot for lot in lots if lot not in sellable]
         lots = state["lots"]
         if not lots:
-            state["anchor"] = price  # 清仓后以当前价为新锚点
+            state["anchor"] = price
         msgs.append((
             f"卖出提醒：{len(sellable)} 份可获利了结（现价 {price:.2f}）",
             "\n".join(lines)
@@ -207,18 +260,20 @@ def process_tick(price, state):
             + f"\n> 剩余持仓 {len(lots)} 份",
         ))
 
-    # ---- 买入信号：较参考价跌满一格 ----
+        # 同一轮不同时发出方向相反的信号；下一轮会基于剩余持仓重新判断。
+        return msgs
+
     ref = lots[-1]["price"] if lots else state["anchor"]
     if price <= ref * (1 - GRID_STEP_PCT):
         steps = int((ref - price) / (ref * GRID_STEP_PCT))
         room = MAX_LOTS - len(lots)
-        n = min(steps, room)
-        if n > 0:
-            for _ in range(n):
+        count = min(steps, room)
+        if count > 0:
+            for _ in range(count):
                 lots.append({"price": price, "time": datetime.now().strftime("%Y-%m-%d %H:%M")})
             state.pop("full_warned", None)
             msgs.append((
-                f"买入提醒：下跌 {(ref - price) / ref * 100:.2f}%，建议买入 {n} 份（现价 {price:.2f}）",
+                f"买入提醒：下跌 {(ref - price) / ref * 100:.2f}%，建议买入 {count} 份（现价 {price:.2f}）",
                 f"> 参考价 {ref:.2f} → 现价 {price:.2f}\n"
                 f"> 本笔回本价：{breakeven_price(price):.2f} 元/克（含双边手续费）\n"
                 f"> 目标卖出价：{sell_target(price):.2f} 元/克（净赚 ≥{MIN_PROFIT_RATE:.1%}）\n"
@@ -228,17 +283,17 @@ def process_tick(price, state):
             state["full_warned"] = True
             msgs.append((
                 f"持仓已满 {MAX_LOTS} 份，暂停加仓（现价 {price:.2f}）",
-                f"> 价格仍在下跌但已达最大持仓，不再提示买入\n"
-                f"> 如要继续补仓请调大脚本里的 MAX_LOTS",
+                "> 价格仍在下跌但已达最大持仓，不再提示买入\n"
+                "> 如要继续补仓请调大脚本配置区的 MAX_LOTS",
             ))
-
     return msgs
 
 
 def position_summary(state, price):
     lots = state.get("lots", [])
     if not lots:
-        return f"> 当前空仓，锚点价 {state.get('anchor', price):.2f}"
+        anchor = state.get("anchor") or price
+        return f"> 当前空仓，锚点价 {anchor:.2f}"
     nearest = min(sell_target(lot["price"]) for lot in lots)
     ref = lots[-1]["price"]
     return (
@@ -248,98 +303,189 @@ def position_summary(state, price):
     )
 
 
+def _validate_state(state):
+    if not isinstance(state, dict):
+        raise ValueError("状态根节点必须是对象")
+    anchor = state.get("anchor")
+    if anchor is not None:
+        state["anchor"] = _valid_price(anchor, "状态", "anchor")
+    lots = state.get("lots")
+    if not isinstance(lots, list):
+        raise ValueError("状态 lots 必须是数组")
+    for index, lot in enumerate(lots):
+        if not isinstance(lot, dict):
+            raise ValueError(f"状态 lots[{index}] 必须是对象")
+        lot["price"] = _valid_price(lot.get("price"), "状态", f"lots[{index}].price")
+    if len(lots) > MAX_LOTS:
+        log(f"警告：状态持仓 {len(lots)} 份，超过配置上限 {MAX_LOTS} 份")
+    return state
+
+
+def _read_state_file(path):
+    return _validate_state(json.loads(path.read_text(encoding="utf-8")))
+
+
+def _load_state_unlocked():
+    if not STATE_FILE.exists():
+        return {"anchor": None, "lots": []}
+    try:
+        return _read_state_file(STATE_FILE)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        logger.error("主状态文件读取失败: %s", exc)
+        if STATE_BACKUP_FILE.exists():
+            try:
+                state = _read_state_file(STATE_BACKUP_FILE)
+                logger.warning("已从状态备份 %s 恢复", STATE_BACKUP_FILE.name)
+                return state
+            except (OSError, ValueError, json.JSONDecodeError) as backup_exc:
+                logger.error("状态备份读取失败: %s", backup_exc)
+        raise RuntimeError("state.json 及其备份均不可用，拒绝以空持仓继续运行") from exc
+
+
+def _save_state_unlocked(state):
+    state = _validate_state(state)
+    temp_file = STATE_FILE.with_name(f"{STATE_FILE.name}.{os.getpid()}.tmp")
+    try:
+        if STATE_FILE.exists():
+            try:
+                _read_state_file(STATE_FILE)
+                shutil.copy2(STATE_FILE, STATE_BACKUP_FILE)
+            except (OSError, ValueError, json.JSONDecodeError):
+                pass
+        with temp_file.open("w", encoding="utf-8", newline="\n") as handle:
+            json.dump(state, handle, ensure_ascii=False, indent=2)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_file, STATE_FILE)
+    finally:
+        try:
+            temp_file.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+@contextmanager
+def state_lock(timeout=10):
+    """使用单独锁文件串行化后台进程和命令行的状态读改写。"""
+    deadline = time.monotonic() + timeout
+    with STATE_LOCK_FILE.open("a+b") as handle:
+        handle.seek(0, os.SEEK_END)
+        if handle.tell() == 0:
+            handle.write(b"0")
+            handle.flush()
+        while True:
+            try:
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                break
+            except OSError:
+                if time.monotonic() >= deadline:
+                    raise TimeoutError("等待 state.json 文件锁超时")
+                time.sleep(0.05)
+        try:
+            yield
+        finally:
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+
+
 def load_state():
-    if STATE_FILE.exists():
-        state = json.loads(STATE_FILE.read_text(encoding="utf-8"))
-        if "lots" in state:  # 仅接受新版格式，旧版 baseline 状态直接重建
-            return state
-    return {"anchor": None, "lots": []}
+    with state_lock():
+        return _load_state_unlocked()
 
 
 def save_state(state):
-    STATE_FILE.write_text(
-        json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    with state_lock():
+        _save_state_unlocked(state)
 
-
-def state_mtime():
-    return STATE_FILE.stat().st_mtime if STATE_FILE.exists() else 0
-
-
-# ---------------------- 持仓同步命令 ----------------------
-# 监控进程每轮会检测 state.json 的外部修改并热重载，
-# 因此这些命令可以在监控运行时直接使用，无需重启。
 
 def cmd_status():
     state = load_state()
     try:
-        price, yesterday = fetch_price()
-        head = f"> 当前价：{price:.2f} 元/克（日内 {price - yesterday:+.2f}）\n"
-    except Exception as e:
-        price, head = None, f"> 取价失败：{e}\n"
-    text = head + position_summary(state, price or 0)
-    print(text.replace("> ", ""))
+        price, yesterday, source = fetch_price()
+        head = f"> 当前价：{price:.2f} 元/克（日内 {price - yesterday:+.2f}，来源：{source}）\n"
+    except Exception as exc:
+        price, head = None, f"> 取价失败：{exc}\n"
+    print((head + position_summary(state, price or 0)).replace("> ", ""))
 
 
-def cmd_bought(price, n):
-    state = load_state()
-    for _ in range(n):
-        state["lots"].append(
-            {"price": price, "time": datetime.now().strftime("%Y-%m-%d %H:%M"), "manual": True}
-        )
-    save_state(state)
+def cmd_bought(price, count):
+    price = _valid_price(price, "命令", "price")
+    if count <= 0:
+        raise ValueError("买入份数必须大于 0")
+    with state_lock():
+        state = _load_state_unlocked()
+        if len(state["lots"]) + count > MAX_LOTS:
+            raise ValueError(f"记录后将超过最大持仓 {MAX_LOTS} 份")
+        for _ in range(count):
+            state["lots"].append({
+                "price": price,
+                "time": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                "manual": True,
+            })
+        _save_state_unlocked(state)
     notify(
-        f"已记录买入：{n} 份 @ {price:.2f}",
+        f"已记录买入：{count} 份 @ {price:.2f}",
         f"> 回本价 {breakeven_price(price):.2f}，目标卖出价 {sell_target(price):.2f}\n"
         f"> 当前持仓 {len(state['lots'])}/{MAX_LOTS} 份",
     )
 
 
 def cmd_sold(target):
-    state = load_state()
-    lots = state["lots"]
-    if not lots:
-        print("当前没有持仓记录")
-        return
-    if target == "all":
-        removed, state["lots"] = lots, []
-    else:
-        price = float(target)
-        # 删除买入价最接近的一笔（容差 1%，防止误删）
-        lot = min(lots, key=lambda l: abs(l["price"] - price))
-        if abs(lot["price"] - price) > price * 0.01:
-            print(f"未找到买入价接近 {price:.2f} 的持仓，现有：" +
-                  ", ".join(f"{l['price']:.2f}" for l in lots))
+    with state_lock():
+        state = _load_state_unlocked()
+        lots = state["lots"]
+        if not lots:
+            print("当前没有持仓记录")
             return
-        removed = [lot]
-        lots.remove(lot)
-    save_state(state)
+        if target == "all":
+            removed, state["lots"] = list(lots), []
+        else:
+            price = _valid_price(target, "命令", "price")
+            lot = min(lots, key=lambda item: abs(item["price"] - price))
+            if abs(lot["price"] - price) > price * 0.01:
+                print(
+                    f"未找到买入价接近 {price:.2f} 的持仓，现有："
+                    + ", ".join(f"{item['price']:.2f}" for item in lots)
+                )
+                return
+            removed = [lot]
+            lots.remove(lot)
+        _save_state_unlocked(state)
     notify(
         f"已移除持仓 {len(removed)} 份",
-        "> 买入价：" + ", ".join(f"{l['price']:.2f}" for l in removed)
+        "> 买入价：" + ", ".join(f"{item['price']:.2f}" for item in removed)
         + f"\n> 剩余持仓 {len(state['lots'])} 份",
     )
 
 
 def cmd_clear():
-    state = {"anchor": None, "lots": []}
-    save_state(state)
+    with state_lock():
+        _save_state_unlocked({"anchor": None, "lots": []})
     notify("持仓已清空", "> 锚点将在下一轮以现价重建")
 
 
+def _positive_count(value):
+    try:
+        count = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("份数必须是整数") from exc
+    if count <= 0:
+        raise argparse.ArgumentTypeError("份数必须大于 0")
+    return count
+
+
 def main():
-    parser = argparse.ArgumentParser(
-        description="积存金网格监控（含手续费核算）",
-        epilog="示例：bought 899.5 2 记录买入2份；sold 899.5 移除该笔；sold all 全部移除",
-    )
+    parser = argparse.ArgumentParser(description="积存金网格监控（含手续费核算）")
     parser.add_argument("--test", action="store_true", help="发送一条测试通知后退出")
     sub = parser.add_subparsers(dest="cmd")
     sub.add_parser("status", help="查看当前持仓与触发价")
-    p = sub.add_parser("bought", help="记录实际买入：bought 价格 [份数]")
-    p.add_argument("price", type=float)
-    p.add_argument("n", type=int, nargs="?", default=1)
-    p = sub.add_parser("sold", help="移除持仓（已卖出/当初没买）：sold 买入价 或 sold all")
-    p.add_argument("price")
+    bought_parser = sub.add_parser("bought", help="记录实际买入：bought 价格 [份数]")
+    bought_parser.add_argument("price", type=float)
+    bought_parser.add_argument("n", type=_positive_count, nargs="?", default=1)
+    sold_parser = sub.add_parser("sold", help="移除持仓：sold 买入价 或 sold all")
+    sold_parser.add_argument("price")
     sub.add_parser("clear", help="清空全部持仓并重置锚点")
     args = parser.parse_args()
 
@@ -351,32 +497,39 @@ def main():
         return cmd_sold(args.price)
     if args.cmd == "clear":
         return cmd_clear()
-
     if args.test:
-        price, _ = fetch_price()
-        notify("积存金监控测试", f"当前价格 {price:.2f} 元/克，通知链路正常。")
+        price, _, source = fetch_price()
+        if not (WECOM_WEBHOOK or SERVERCHAN_SENDKEY):
+            raise RuntimeError("未配置通知渠道，无法执行通知测试")
+        notify("积存金监控测试", f"当前价格 {price:.2f} 元/克，来源：{source}，通知链路正常。")
         return
 
-    min_move = sell_target(1.0) - 1.0  # 一份从买到卖至少需要的涨幅（比例）
+    min_move = sell_target(1.0) - 1.0
     log(
         f"启动监控：买入步长 {GRID_STEP_PCT:.1%}，手续费 买{BUY_FEE_RATE:.1%}/卖{SELL_FEE_RATE:.1%}，"
         f"单份获利需上涨 ≥{min_move:.2%}"
     )
+    if not (WECOM_WEBHOOK or SERVERCHAN_SENDKEY):
+        log("警告：未在脚本配置区设置 WECOM_WEBHOOK 或 SERVERCHAN_SENDKEY")
 
-    state = load_state()
     try:
-        price, yesterday = fetch_price()
-    except Exception as e:
-        price = yesterday = None
-        log(f"启动取价失败: {e}")
+        price, yesterday, source = fetch_price()
+    except Exception as exc:
+        price = yesterday = source = None
+        log(f"启动取价失败: {exc}")
+
+    with state_lock():
+        state = _load_state_unlocked()
+        if price is not None and not state["lots"] and (
+            state["anchor"] is None or price > state["anchor"]
+        ):
+            state["anchor"] = price
+            _save_state_unlocked(state)
 
     if price is not None:
-        if not state["lots"] and (state["anchor"] is None or price > state["anchor"]):
-            state["anchor"] = price
-        save_state(state)
         notify(
             "积存金监控已启动",
-            f"> 当前价：{price:.2f} 元/克（日内 {price - yesterday:+.2f}）\n"
+            f"> 当前价：{price:.2f} 元/克（日内 {price - yesterday:+.2f}，来源：{source}）\n"
             f"{position_summary(state, price)}\n"
             f"> 买入步长 {GRID_STEP_PCT:.1%}｜手续费 买{BUY_FEE_RATE:.1%} 卖{SELL_FEE_RATE:.1%}｜"
             f"单份获利需涨 ≥{min_move:.2%}",
@@ -384,37 +537,44 @@ def main():
     else:
         notify("积存金监控已启动", "> 启动取价失败，稍后自动重试")
 
-    known_mtime = state_mtime()
-
+    failure_count = 0
+    tick_count = 0
+    delay = POLL_INTERVAL
     while True:
-        time.sleep(POLL_INTERVAL)
-
-        # state.json 被 bought/sold 等命令改过 -> 热重载持仓
-        if state_mtime() != known_mtime:
-            state = load_state()
-            known_mtime = state_mtime()
-            log(f"检测到持仓被外部修改，已重载：{len(state['lots'])} 份")
-
+        time.sleep(delay)
         try:
-            price, yesterday = fetch_price()
-        except Exception as e:
-            log(f"取价失败: {e}")
+            price, yesterday, source = fetch_price()
+        except Exception as exc:
+            failure_count += 1
+            delay = min(POLL_INTERVAL * (2 ** min(failure_count, 5)), MAX_BACKOFF)
+            log(f"取价失败（连续 {failure_count} 次，下次 {delay} 秒后重试）: {exc}")
             continue
 
-        msgs = process_tick(price, state)
+        if failure_count:
+            log(f"取价已恢复，之前连续失败 {failure_count} 次，当前来源：{source}")
+        failure_count = 0
+        delay = POLL_INTERVAL
+        tick_count += 1
+
+        with state_lock():
+            state = _load_state_unlocked()
+            before = json.dumps(state, ensure_ascii=False, sort_keys=True)
+            messages = process_tick(price, state)
+            after = json.dumps(state, ensure_ascii=False, sort_keys=True)
+            if after != before:
+                _save_state_unlocked(state)
+
         lots = state["lots"]
-        nearest_sell = min((sell_target(l["price"]) for l in lots), default=None)
+        nearest_sell = min((sell_target(item["price"]) for item in lots), default=None)
         ref = lots[-1]["price"] if lots else state["anchor"]
-        log(
-            f"现价 {price:.2f} | 持仓 {len(lots)} 份 | "
-            f"下格买入 {ref * (1 - GRID_STEP_PCT):.2f} | "
-            f"最近卖出 {f'{nearest_sell:.2f}' if nearest_sell else '—'}"
-        )
-        if msgs:
-            save_state(state)
-            known_mtime = state_mtime()
-            for title, content in msgs:
-                notify(title, content)
+        if messages or tick_count % HEARTBEAT_TICKS == 0:
+            log(
+                f"现价 {price:.2f}({source}) | 持仓 {len(lots)} 份 | "
+                f"下格买入 {ref * (1 - GRID_STEP_PCT):.2f} | "
+                f"最近卖出 {f'{nearest_sell:.2f}' if nearest_sell else '—'}"
+            )
+        for title, content in messages:
+            notify(title, content)
 
 
 if __name__ == "__main__":
@@ -422,3 +582,6 @@ if __name__ == "__main__":
         main()
     except KeyboardInterrupt:
         log("已停止")
+    except Exception as exc:
+        logger.critical("程序异常退出: %s\n%s", exc, traceback.format_exc())
+        raise
