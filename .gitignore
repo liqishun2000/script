@@ -54,3 +54,6 @@ Thumbs.db
 # 本地数据、日志（按需取消注释）
 # *.log
 # data/
+
+monitor/gold/gold_monitor.log
+monitor/gold/gold_monitor.log.*

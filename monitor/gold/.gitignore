@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+*.pyc
+*.log.*
+state.json.*.tmp
+state.json.bak
+state.json.lock
+gold_monitor.log
+gold_monitor.log.*
