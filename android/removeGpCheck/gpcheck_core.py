@@ -22,6 +22,7 @@ ET.register_namespace("android", ANDROID_NS)
 PAIRIP_APPLICATION = "com.pairip.application.Application"
 PAIRIP_PROVIDER = "com.pairip.licensecheck.LicenseContentProvider"
 PAIRIP_LICENSE_ACTIVITY = "com.pairip.licensecheck.LicenseActivity"
+PLAY_STORE_PACKAGE = "com.android.vending"
 
 LogFn = Callable[[str], None]
 
@@ -153,6 +154,10 @@ class InstallResult:
     suspicious_logs: list[str]
     screenshot: Path | None
     output: str
+    strategy: str = "manifest_patch"
+    requested_installer: str = ""
+    installer_package: str = ""
+    installer_verified: bool = True
 
 
 def _null_log(_: str) -> None:
@@ -823,6 +828,41 @@ def _adb(
     )
 
 
+def _build_install_command(
+    selected_apks: list[Path],
+    installer_package: str = "",
+) -> list[str]:
+    command = ["install-multiple", "--no-incremental", "-r"]
+    if installer_package:
+        command.extend(["-i", installer_package])
+    command.extend(str(path) for path in selected_apks)
+    return command
+
+
+def _parse_installer_package(package_name: str, output: str) -> str:
+    for line in output.splitlines():
+        match = re.fullmatch(r"package:(\S+)\s+installer=(\S+)", line.strip())
+        if match and match.group(1) == package_name:
+            installer = match.group(2)
+            return "" if installer == "null" else installer
+    return ""
+
+
+def _read_installer_package(
+    toolchain: Toolchain,
+    package_name: str,
+    log: LogFn,
+) -> str:
+    _, output = _adb(
+        toolchain,
+        ["shell", "pm", "list", "packages", "-i", package_name],
+        log,
+        check=False,
+        stream_output=False,
+    )
+    return _parse_installer_package(package_name, output)
+
+
 def read_device_info(toolchain: Toolchain, log: LogFn = _null_log) -> DeviceInfo:
     toolchain.validate_device()
     _, devices_output = _adb(toolchain, ["devices"], log)
@@ -917,11 +957,14 @@ def choose_device_apks(
     return paths
 
 
-def install_and_verify(
+def _install_from_directory_and_verify(
     analysis: AnalysisResult,
-    build: BuildResult,
+    apk_directory: Path,
     toolchain: Toolchain,
     grant_cleaner_permissions: bool = True,
+    installer_package: str = "",
+    strategy: str = "manifest_patch",
+    screenshot_name: str = "installed-launch.png",
     log: LogFn = _null_log,
 ) -> InstallResult:
     if not analysis.main_activity:
@@ -931,15 +974,25 @@ def install_and_verify(
         f"Device: {device.model}, API {device.sdk}, ABI={','.join(device.abi_list)}, "
         f"density={device.density}, locale={device.locale}"
     )
-    selected_apks = choose_device_apks(analysis.split_apks, build.signed_apk_dir, device)
+    selected_apks = choose_device_apks(analysis.split_apks, apk_directory, device)
     log("Selected APKs: " + ", ".join(path.name for path in selected_apks))
 
-    install_command = [
-        "install-multiple",
-        "--no-incremental",
-        "-r",
-        *[str(path) for path in selected_apks],
-    ]
+    if installer_package:
+        installer_code, installer_path = _adb(
+            toolchain,
+            ["shell", "pm", "path", installer_package],
+            log,
+            check=False,
+            stream_output=False,
+        )
+        if installer_code != 0 or not any(
+            line.startswith("package:") for line in installer_path.splitlines()
+        ):
+            raise GpCheckError(
+                f"Requested installer is not installed on the device: {installer_package}"
+            )
+
+    install_command = _build_install_command(selected_apks, installer_package)
     returncode, install_output = _adb(toolchain, install_command, log, check=False)
     if returncode != 0 or "Success" not in install_output:
         if "UPDATE_INCOMPATIBLE" in install_output:
@@ -948,6 +1001,12 @@ def install_and_verify(
                 "because uninstalling clears app data."
             )
         raise CommandError([str(toolchain.adb), *install_command], returncode, install_output)
+
+    recorded_installer = _read_installer_package(toolchain, analysis.package_name, log)
+    installer_verified = not installer_package or recorded_installer == installer_package
+    requested_label = installer_package or "(not specified)"
+    recorded_label = recorded_installer or "(none)"
+    log(f"Installer source: requested={requested_label}, recorded={recorded_label}")
 
     if grant_cleaner_permissions:
         _adb(
@@ -1008,7 +1067,8 @@ def install_and_verify(
         if re.search(r"pairip|LicenseActivity|FATAL EXCEPTION", line, re.IGNORECASE)
     ]
 
-    screenshot = analysis.workspace / "evidence" / "installed-launch.png"
+    screenshot = analysis.workspace / "evidence" / screenshot_name
+    screenshot.parent.mkdir(parents=True, exist_ok=True)
     remote_screenshot = f"/sdcard/gpcheck-{analysis.package_name}.png"
     _adb(toolchain, ["shell", "screencap", "-p", remote_screenshot], log, check=False)
     pull_code, _ = _adb(
@@ -1020,8 +1080,10 @@ def install_and_verify(
     if pull_code != 0 or not screenshot.is_file():
         screenshot = None
 
-    foreground_ok = analysis.package_name in foreground or "permissioncontroller" in foreground
-    success = bool(pid) and foreground_ok and not suspicious_logs
+    foreground_ok = (
+        analysis.package_name in foreground or "permissioncontroller" in foreground
+    ) and PAIRIP_LICENSE_ACTIVITY not in foreground
+    success = bool(pid) and foreground_ok and not suspicious_logs and installer_verified
     return InstallResult(
         success=success,
         selected_apks=selected_apks,
@@ -1030,4 +1092,45 @@ def install_and_verify(
         suspicious_logs=suspicious_logs,
         screenshot=screenshot,
         output=install_output,
+        strategy=strategy,
+        requested_installer=installer_package,
+        installer_package=recorded_installer,
+        installer_verified=installer_verified,
+    )
+
+
+def install_original_as_play_store_and_verify(
+    analysis: AnalysisResult,
+    toolchain: Toolchain,
+    grant_cleaner_permissions: bool = True,
+    log: LogFn = _null_log,
+) -> InstallResult:
+    log("Priority 1: installing the unmodified APK set with Google Play as installer...")
+    return _install_from_directory_and_verify(
+        analysis=analysis,
+        apk_directory=analysis.extracted_dir,
+        toolchain=toolchain,
+        grant_cleaner_permissions=grant_cleaner_permissions,
+        installer_package=PLAY_STORE_PACKAGE,
+        strategy="play_store_installer",
+        screenshot_name="original-play-store-launch.png",
+        log=log,
+    )
+
+
+def install_and_verify(
+    analysis: AnalysisResult,
+    build: BuildResult,
+    toolchain: Toolchain,
+    grant_cleaner_permissions: bool = True,
+    log: LogFn = _null_log,
+) -> InstallResult:
+    log("Fallback: installing the manifest-patched APK set...")
+    return _install_from_directory_and_verify(
+        analysis=analysis,
+        apk_directory=build.signed_apk_dir,
+        toolchain=toolchain,
+        grant_cleaner_permissions=grant_cleaner_permissions,
+        strategy="manifest_patch",
+        log=log,
     )

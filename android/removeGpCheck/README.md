@@ -29,10 +29,10 @@ python remove_gp_check_gui.py
 操作顺序：
 
 1. 把 XAPK 拖入窗口，工具立即开始分析；也可以点击“选择 XAPK”后点击“分析”。
-2. 查看检测模式、业务 Application、置信度、静态证据和拟执行修改。
-3. 只有高/中置信度的精确已知模式才会启用“构建实验版 XAPK”。
-4. 确认修改后，工具重建 base、签名全部 split、验证全部 DEX 哈希并生成新 XAPK。
-5. “安装并验证”会按连接设备的 ABI、密度和语言选择 split，冷启动后检查前台窗口、PID、PairIP 和崩溃日志。
+2. 首先点击“1. 原包 + Play Store 来源”。工具选择设备所需 split，以 `com.android.vending` 为 installer 安装未修改的原包。
+3. 工具读取 Package Manager 中实际记录的 installer，再冷启动并检查前台窗口、PID、PairIP 和崩溃日志；通过后不需要改包。
+4. 只有首选方案未通过，才使用“2. 构建补丁（回退）”。该按钮只对高/中置信度的精确已知模式启用。
+5. 回退方案会重建 base、签名全部 split、验证全部 DEX 哈希并生成新 XAPK，再由“安装补丁并验证”复验。
 
 工具不会覆盖原始 XAPK，不会自动卸载不同签名的旧版本，也不会执行清理按钮。每次分析使用独立时间戳工作目录，主要输出：
 
@@ -45,6 +45,7 @@ workspace/<样本-时间>/
   evidence/
     AndroidManifest.before.xml
     AndroidManifest.after.xml
+    original-play-store-launch.png
     installed-launch.png
   dist/
     signed-apks/
@@ -52,7 +53,9 @@ workspace/<样本-时间>/
     <原文件名>-patched.xapk
 ```
 
-当前自动修改白名单只有：
+把 Play Store 记录为 installer 对读取 `PackageManager.getInstallerPackageName()` 或 `getInstallSourceInfo()` 的简单来源判断有效，而且完全保留原 APK 和开发者签名，所以应最先尝试。但它不等于获得 Google Play 许可证，也不能替代 Play Integrity、账号购买记录或服务端授权；动态验证仍失败时，才进入 Manifest 补丁回退。
+
+当前回退方案的自动修改白名单只有：
 
 - `com.pairip.application.Application`，且能解析出可信的非 PairIP 父类。
 - `com.pairip.licensecheck.LicenseContentProvider` 的精确 Manifest 注册。
@@ -199,20 +202,21 @@ config.zh.apk
 
 如果漏掉 ABI split，常见错误是 `INSTALL_FAILED_NO_MATCHING_ABIS`；漏掉必需 split，可能出现 `INSTALL_FAILED_MISSING_SPLIT` 或启动时资源异常。
 
-## 5. 先测试原包，记录“失败基线”
+## 5. 首选方案：原包指定 Play Store installer
 
-不要一上来就修改。先证明原包为什么不能运行：
+不要一上来就修改。先保留原签名安装原包，并在安装会话中把 Play Store 声明为 installer：
 
 ```powershell
 $original = 'E:\lab\flare\original'
 
-adb install-multiple -r `
+adb install-multiple --no-incremental -r -i com.android.vending `
   "$original\com.flare.cleaner.storage.apk" `
   "$original\config.arm64_v8a.apk" `
   "$original\config.xxhdpi.apk" `
   "$original\config.en.apk" `
   "$original\config.zh.apk"
 
+adb shell pm list packages -i com.flare.cleaner.storage
 adb logcat -c
 adb shell am force-stop com.flare.cleaner.storage
 adb shell am start -W -n `
@@ -225,14 +229,24 @@ adb logcat -d -v threadtime |
   Select-String 'pairip|LicenseActivity|vending|FATAL EXCEPTION'
 ```
 
-本样本的关键现象：
+installer 查询必须包含：
+
+```text
+package:com.flare.cleaner.storage installer=com.android.vending
+```
+
+配套的 `scripts/03-Install-And-Verify.ps1` 默认使用这个 installer 并执行同样的来源核验。测试补丁本身时可显式传入 `-InstallerPackage ''`，避免把两个方案混在一次结果里。
+
+如果原包随后稳定进入业务页，首选方案已经完成，不要再修改或重签 APK。对于已经安装的同一原包，也可先执行 `adb shell pm set-installer com.flare.cleaner.storage com.android.vending`，但仍要用上面的查询命令确认设备实际记录。
+
+如果仍然失败，并出现以下现象，说明应用不只检查安装来源：
 
 ```text
 com.flare.cleaner.storage/com.pairip.licensecheck.LicenseActivity
 com.android.vending/...UnauthenticatedMainActivity
 ```
 
-这说明失败发生在 PairIP 许可证层，而不是业务首页自己要求 Google 登录。
+在 installer 查询结果正确的前提下，这说明失败仍发生在 PairIP 许可证层，而不是业务首页自己要求 Google 登录；此时才继续后面的静态分析和补丁回退。
 
 ## 6. 解码主 APK
 
@@ -311,12 +325,14 @@ config.zh.apk
 ```powershell
 $original = 'E:\lab\auraclean\original'
 
-adb install-multiple -r `
+adb install-multiple --no-incremental -r -i com.android.vending `
   "$original\com.auraclean.clean.apk" `
   "$original\config.armeabi_v7a.apk" `
   "$original\config.hdpi.apk" `
   "$original\config.en.apk" `
   "$original\config.zh.apk"
+
+adb shell pm list packages -i com.auraclean.clean
 
 adb logcat -c
 adb shell am force-stop com.auraclean.clean
@@ -487,6 +503,7 @@ gol.zli.mcc.FeiApplication
     'config.en.apk',
     'config.zh.apk'
   ) `
+  -InstallerPackage '' `
   -GrantCleanerPermissions
 ```
 
@@ -713,6 +730,7 @@ adb install-multiple -r `
     'config.en.apk',
     'config.zh.apk'
   ) `
+  -InstallerPackage '' `
   -GrantCleanerPermissions
 ```
 
@@ -794,7 +812,7 @@ adb logcat -d -v threadtime |
 某些三星/Android 13 设备不允许增量安装。新版 `adb` 通常会自动回退到普通安装；以命令末尾是否出现 `Success` 为准。必要时使用：
 
 ```powershell
-adb install-multiple --no-incremental -r <apk列表>
+adb install-multiple --no-incremental -r -i com.android.vending <原包 apk 列表>
 ```
 
 ### 15.4 Apktool 构建失败
@@ -820,13 +838,13 @@ adb logcat -d -v threadtime |
 1. 保留原始 XAPK 和 SHA-256。
 2. 解包并阅读 `manifest.json`。
 3. 根据设备 ABI、密度和语言选择 split。
-4. 原包安装并记录失败基线。
-5. 用窗口、PID 和 logcat 定位触发组件。
-6. 判断 PairIP 是 Application 型还是 Provider 型。
+4. 用 `-i com.android.vending` 安装原包，并读取 Package Manager 确认 installer。
+5. 冷启动检查窗口、PID 和 logcat；通过即停止，不再改包。
+6. 只有首选方案失败时，才定位触发组件并判断 PairIP 是 Application 型还是 Provider 型。
 7. 只做一个最小 Manifest 修改。
 8. 重建并验证所有 DEX 哈希不变。
 9. 用同一证书重签 base 和全部选中 split。
-10. 安装、授权、冷启动、日志和功能页复验。
+10. 不叠加 installer 方案，独立安装、授权、冷启动并复验补丁。
 11. 保留截图、UI XML、日志和最终 APK。
 
 两份导师样本的完整记录：

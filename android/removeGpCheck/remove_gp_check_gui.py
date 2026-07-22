@@ -20,6 +20,7 @@ except ImportError:
     HAS_DND = False
 
 from gpcheck_core import (
+    PLAY_STORE_PACKAGE,
     AnalysisResult,
     BuildResult,
     GpCheckError,
@@ -28,6 +29,7 @@ from gpcheck_core import (
     build_patched_xapk,
     discover_toolchain,
     install_and_verify,
+    install_original_as_play_store_and_verify,
 )
 
 
@@ -150,7 +152,7 @@ class PairIpLabApp:
         tree_scroll.grid(row=0, column=1, sticky="ns")
         self.result_tree.configure(yscrollcommand=tree_scroll.set)
 
-        actions_frame = ttk.LabelFrame(result_panel, text="拟执行修改", padding=8)
+        actions_frame = ttk.LabelFrame(result_panel, text="方案顺序与回退修改", padding=8)
         actions_frame.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(10, 0))
         actions_frame.columnconfigure(0, weight=1)
         self.actions_text = tk.Text(
@@ -181,40 +183,47 @@ class PairIpLabApp:
 
         footer = ttk.Frame(outer)
         footer.grid(row=4, column=0, sticky="ew", pady=(12, 0))
-        footer.columnconfigure(3, weight=1)
+        footer.columnconfigure(4, weight=1)
+        self.original_install_button = ttk.Button(
+            footer,
+            text="1. 原包 + Play Store 来源",
+            style="Primary.TButton",
+            command=self._start_original_install,
+            state=tk.DISABLED,
+        )
+        self.original_install_button.grid(row=0, column=0, padx=(0, 8))
         self.build_button = ttk.Button(
             footer,
-            text="构建实验版 XAPK",
-            style="Primary.TButton",
+            text="2. 构建补丁（回退）",
             command=self._start_build,
             state=tk.DISABLED,
         )
-        self.build_button.grid(row=0, column=0, padx=(0, 8))
+        self.build_button.grid(row=0, column=1, padx=(0, 8))
         self.install_button = ttk.Button(
             footer,
-            text="安装并验证",
+            text="安装补丁并验证",
             command=self._start_install,
             state=tk.DISABLED,
         )
-        self.install_button.grid(row=0, column=1, padx=(0, 8))
+        self.install_button.grid(row=0, column=2, padx=(0, 8))
         self.open_button = ttk.Button(
             footer,
             text="打开输出目录",
             command=self._open_output,
             state=tk.DISABLED,
         )
-        self.open_button.grid(row=0, column=2)
+        self.open_button.grid(row=0, column=3)
+        self.progress = ttk.Progressbar(footer, mode="indeterminate", length=150)
+        self.progress.grid(row=0, column=5, sticky="e")
         ttk.Checkbutton(
             footer,
             text="安装后配置清理权限",
             variable=self.grant_permissions_var,
-        ).grid(row=0, column=4, sticky="e", padx=(12, 10))
-        self.progress = ttk.Progressbar(footer, mode="indeterminate", length=150)
-        self.progress.grid(row=0, column=5, sticky="e")
+        ).grid(row=1, column=0, columnspan=6, sticky="w", pady=(8, 0))
 
         ttk.Label(
             outer,
-            text="仅用于已授权样本；未知模式只分析，不自动修改。",
+            text="仅用于已授权样本；首选方案不改包，Manifest 补丁仅作为已知模式的回退。",
             style="Subtle.TLabel",
         ).grid(row=5, column=0, sticky="w", pady=(8, 0))
 
@@ -316,9 +325,33 @@ class PairIpLabApp:
         self.analysis = result
         self.build_result = None
         self._show_analysis(result)
+        self.original_install_button.configure(
+            state=tk.NORMAL if result.main_activity else tk.DISABLED
+        )
         self.build_button.configure(state=tk.NORMAL if result.supported else tk.DISABLED)
         self.install_button.configure(state=tk.DISABLED)
         self.open_button.configure(state=tk.NORMAL)
+
+    def _start_original_install(self) -> None:
+        if self.busy or not self.analysis:
+            return
+        if not messagebox.askyesno(
+            "确认首选方案",
+            "将安装未修改、未重签名的原始 APK 集，并把 installer 声明为 "
+            f"{PLAY_STORE_PACKAGE}。不同签名的已安装版本不会被自动卸载。继续吗？",
+        ):
+            return
+        analysis = self.analysis
+        self._run_async(
+            "正在验证首选方案",
+            lambda: install_original_as_play_store_and_verify(
+                analysis,
+                self._toolchain(),
+                self.grant_permissions_var.get(),
+                self._thread_log,
+            ),
+            self._install_complete,
+        )
 
     def _start_build(self) -> None:
         if self.busy or not self.analysis:
@@ -362,8 +395,9 @@ class PairIpLabApp:
         if self.busy or not self.analysis or not self.build_result:
             return
         if not messagebox.askyesno(
-            "确认安装",
-            "将使用 adb 覆盖安装同签名版本。不同签名的已安装版本不会被自动卸载。继续吗？",
+            "确认安装回退补丁",
+            "首选方案未通过时，才应安装 Manifest 补丁。将使用 adb 覆盖安装同签名版本；"
+            "不同签名的已安装版本不会被自动卸载。继续吗？",
         ):
             return
         analysis = self.analysis
@@ -383,14 +417,40 @@ class PairIpLabApp:
     def _install_complete(self, result) -> None:
         selected = ", ".join(path.name for path in result.selected_apks)
         self._append_log(f"设备安装集: {selected}")
+        requested_installer = result.requested_installer or "未指定"
+        recorded_installer = result.installer_package or "未记录"
+        self._append_log(
+            f"Installer: 请求={requested_installer}, 实际={recorded_installer}, "
+            f"匹配={result.installer_verified}"
+        )
         self._append_log(f"PID: {result.pid or 'none'}")
         self._append_log(f"前台窗口: {result.foreground or 'none'}")
+        if result.suspicious_logs:
+            self._append_log(f"可疑日志: {len(result.suspicious_logs)} 条")
         if result.screenshot:
             self._append_log(f"启动截图: {result.screenshot}")
-        if result.success:
-            messagebox.showinfo("验证通过", "应用进程和前台窗口正常，未发现 PairIP 或崩溃日志。")
+
+        if result.strategy == "play_store_installer" and result.success:
+            messagebox.showinfo(
+                "首选方案验证通过",
+                "原包已记录为 Play Store 安装来源并正常启动，无需修改或重签名 APK。",
+            )
+        elif result.strategy == "play_store_installer":
+            messagebox.showwarning(
+                "首选方案未通过",
+                "安装来源方案已执行，但动态验证未通过。请查看 installer、前台窗口和日志；"
+                "确认后可使用 Manifest 补丁回退方案。",
+            )
+        elif result.success:
+            messagebox.showinfo(
+                "回退方案验证通过",
+                "补丁版应用进程和前台窗口正常，未发现 PairIP 或崩溃日志。",
+            )
         else:
-            messagebox.showwarning("需要复核", "安装完成，但动态验证未全部通过。请查看执行日志。")
+            messagebox.showwarning(
+                "回退方案需要复核",
+                "补丁安装完成，但动态验证未全部通过。请查看执行日志。",
+            )
 
     def _open_output(self) -> None:
         path: Path | None = None
@@ -411,6 +471,7 @@ class PairIpLabApp:
             ("应用", result.app_name),
             ("包名", result.package_name),
             ("版本", f"{result.version_name} ({result.version_code})"),
+            ("首选方案", f"原包 + installer={PLAY_STORE_PACKAGE}"),
             ("启动 Activity", result.main_activity or "未找到"),
             ("Application", result.application_name or "默认"),
             ("业务 Application", result.original_application_name or "不适用/未识别"),
@@ -418,23 +479,31 @@ class PairIpLabApp:
             ("PairIP Activity", "存在" if result.pairip_activity_found else "未发现"),
             ("模式", " + ".join(pattern) if pattern else "未知"),
             ("置信度", result.confidence),
-            ("可自动处理", "是" if result.supported else "否"),
+            ("补丁回退可用", "是" if result.supported else "否"),
             ("XAPK SHA-256", result.xapk_sha256),
             ("工作目录", str(result.workspace)),
         ]
         for field, value in rows:
             self.result_tree.insert("", tk.END, values=(field, value))
 
-        lines = [item.description for item in result.actions]
+        lines = [
+            f"优先方案（不修改 APK）：以 {PLAY_STORE_PACKAGE} 为 installer 安装并验证原包。"
+        ]
+        if result.actions:
+            lines.extend(["", "回退方案（仅在优先方案失败后）："])
+            lines.extend(item.description for item in result.actions)
+        else:
+            lines.extend(["", "回退方案：未识别到可自动修改的精确模式。"])
         if result.evidence:
             lines.append("")
             lines.extend(f"证据: {item}" for item in result.evidence)
-        self._set_actions("\n".join(lines) if lines else "没有可自动执行的修改。")
+        self._set_actions("\n".join(lines))
 
     def _clear_results(self) -> None:
         for item in self.result_tree.get_children():
             self.result_tree.delete(item)
         self._set_actions("")
+        self.original_install_button.configure(state=tk.DISABLED)
         self.build_button.configure(state=tk.DISABLED)
         self.install_button.configure(state=tk.DISABLED)
         self.open_button.configure(state=tk.DISABLED)
@@ -472,6 +541,7 @@ class PairIpLabApp:
     def _set_controls_busy(self, busy: bool) -> None:
         self.analyze_button.configure(state=tk.DISABLED if busy else tk.NORMAL)
         if busy:
+            self.original_install_button.configure(state=tk.DISABLED)
             self.build_button.configure(state=tk.DISABLED)
             self.install_button.configure(state=tk.DISABLED)
 
@@ -480,6 +550,8 @@ class PairIpLabApp:
         self.status_var.set("就绪")
         self.progress.stop()
         self._set_controls_busy(False)
+        if self.analysis and self.analysis.main_activity:
+            self.original_install_button.configure(state=tk.NORMAL)
         if self.analysis and self.analysis.supported:
             self.build_button.configure(state=tk.NORMAL if not self.build_result else tk.DISABLED)
         if self.build_result:

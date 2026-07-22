@@ -12,6 +12,8 @@ param(
     [Parameter(Mandatory = $true)]
     [string[]]$ApkNames,
 
+    [string]$InstallerPackage = 'com.android.vending',
+
     [switch]$GrantCleanerPermissions
 )
 
@@ -32,12 +34,40 @@ foreach ($apkName in $ApkNames) {
     $apkPaths += $apkPath
 }
 
-Write-Host 'Installing APK set...'
-& adb install-multiple --no-incremental -r @apkPaths
+if ($InstallerPackage) {
+    $installerPaths = @(& adb shell pm path $InstallerPackage)
+    if ($LASTEXITCODE -ne 0 -or -not ($installerPaths -match '^package:')) {
+        throw "Requested installer is not installed on the device: $InstallerPackage"
+    }
+}
+
+$installArgs = @('install-multiple', '--no-incremental', '-r')
+if ($InstallerPackage) {
+    $installArgs += @('-i', $InstallerPackage)
+}
+$installArgs += $apkPaths
+
+Write-Host "Installing APK set with installer=$InstallerPackage..."
+& adb @installArgs
 if ($LASTEXITCODE -ne 0) {
     Write-Warning 'Installation failed. If the error is UPDATE_INCOMPATIBLE, the installed app uses another certificate.'
     Write-Warning "After confirming its data can be deleted, uninstall manually: adb uninstall $PackageName"
     throw 'adb install-multiple failed.'
+}
+
+$recordedInstaller = ''
+$sourceLines = @(& adb shell pm list packages -i $PackageName)
+foreach ($line in $sourceLines) {
+    if ($line -match '^package:(\S+)\s+installer=(\S+)$' -and $Matches[1] -eq $PackageName) {
+        if ($Matches[2] -ne 'null') {
+            $recordedInstaller = $Matches[2]
+        }
+        break
+    }
+}
+Write-Host "Installer source: requested=$InstallerPackage recorded=$recordedInstaller"
+if ($InstallerPackage -and $recordedInstaller -ne $InstallerPackage) {
+    throw "Installer source verification failed: expected $InstallerPackage, found $recordedInstaller"
 }
 
 if ($GrantCleanerPermissions) {
