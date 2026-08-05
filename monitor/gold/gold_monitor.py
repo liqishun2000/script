@@ -13,7 +13,7 @@ import sys
 import time
 import traceback
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, time as clock_time, timedelta
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
@@ -40,6 +40,7 @@ BUY_FEE_RATE = 0.0       # 买入手续费率
 SELL_FEE_RATE = 0.005    # 卖出/赎回手续费率，0.5%
 MIN_PROFIT_RATE = 0.01   # 扣除手续费后的最低净利润率，1%
 GRID_STEP_PCT = 0.012    # 买入网格间距，1.2%
+EMPTY_RISE_ALERT_PCT = 0.012  # 空仓时每累计上涨 1.2% 提醒一次
 LOT_GRAMS = 2            # 每份克数，仅用于估算通知中的利润金额
 MAX_LOTS = 10            # 最大持仓份数
 
@@ -47,6 +48,8 @@ MAX_LOTS = 10            # 最大持仓份数
 POLL_INTERVAL = 30       # 正常行情轮询间隔，单位：秒
 MAX_BACKOFF = 900        # 连续取价失败时的最大重试间隔，单位：秒
 HEARTBEAT_TICKS = 10     # 每成功轮询多少次写一条正常心跳日志；10 * 30 秒 = 5 分钟
+PRICE_REQUEST_START = clock_time(9, 0)   # 工作日开始请求行情的时间（含）
+PRICE_REQUEST_END = clock_time(22, 0)    # 工作日停止请求行情的时间（不含）
 
 # 通知渠道
 WECOM_WEBHOOK = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=dfd6e537-8680-4f15-9262-dcf9485fba30"
@@ -64,10 +67,14 @@ if not 0 <= MIN_PROFIT_RATE <= 10:
     raise ValueError("MIN_PROFIT_RATE 必须在 0 到 10 之间")
 if not 0 < GRID_STEP_PCT < 1:
     raise ValueError("GRID_STEP_PCT 必须在 0 到 1 之间")
+if not 0 < EMPTY_RISE_ALERT_PCT < 1:
+    raise ValueError("EMPTY_RISE_ALERT_PCT 必须在 0 到 1 之间")
 if LOT_GRAMS <= 0 or MAX_LOTS <= 0:
     raise ValueError("LOT_GRAMS 和 MAX_LOTS 必须大于 0")
 if POLL_INTERVAL < 5 or MAX_BACKOFF < POLL_INTERVAL or HEARTBEAT_TICKS < 1:
     raise ValueError("轮询、退避或心跳参数不合理")
+if PRICE_REQUEST_START >= PRICE_REQUEST_END:
+    raise ValueError("PRICE_REQUEST_START 必须早于 PRICE_REQUEST_END")
 
 
 def _build_logger():
@@ -123,6 +130,47 @@ def _build_session():
 session = _build_session()
 
 
+class MarketClosedError(RuntimeError):
+    """当前时段不允许请求黄金行情。"""
+
+
+def is_price_request_allowed(now=None):
+    now = now or datetime.now()
+    return (
+        now.weekday() < 5
+        and PRICE_REQUEST_START <= now.time() < PRICE_REQUEST_END
+    )
+
+
+def next_price_request_time(now=None):
+    now = now or datetime.now()
+    candidate = now.replace(
+        hour=PRICE_REQUEST_START.hour,
+        minute=PRICE_REQUEST_START.minute,
+        second=PRICE_REQUEST_START.second,
+        microsecond=0,
+    )
+    if now.weekday() < 5 and now < candidate:
+        return candidate
+
+    candidate += timedelta(days=1)
+    while candidate.weekday() >= 5:
+        candidate += timedelta(days=1)
+    return candidate
+
+
+def market_closed_message(now=None):
+    now = now or datetime.now()
+    if now.weekday() >= 5:
+        reason = "周末休市"
+    else:
+        reason = (
+            f"非取价时段（{PRICE_REQUEST_END:%H:%M} 至次日 "
+            f"{PRICE_REQUEST_START:%H:%M}）"
+        )
+    return f"{reason}，下次取价时间 {next_price_request_time(now):%Y-%m-%d %H:%M}"
+
+
 def _valid_price(value, source, field):
     try:
         price = float(value)
@@ -164,7 +212,10 @@ def fetch_price_sina():
     )
 
 
-def fetch_price():
+def fetch_price(now=None):
+    now = now or datetime.now()
+    if not is_price_request_allowed(now):
+        raise MarketClosedError(market_closed_message(now))
     try:
         price, yesterday = fetch_price_jd()
         return price, yesterday, "京东"
@@ -235,8 +286,26 @@ def process_tick(price, state):
     msgs = []
     lots = state.setdefault("lots", [])
 
-    if not lots and (state.get("anchor") is None or price > state["anchor"]):
-        state["anchor"] = price
+    if not lots:
+        anchor = state.get("anchor")
+        rise_base = state.get("empty_rise_base")
+        if rise_base is None:
+            rise_base = anchor if anchor is not None else price
+            state["empty_rise_base"] = rise_base
+        at_latest_high = anchor is None or price >= anchor
+        if anchor is None or price > anchor:
+            state["anchor"] = price
+        if at_latest_high and price >= rise_base * (1 + EMPTY_RISE_ALERT_PCT):
+            rise_pct = (price - rise_base) / rise_base
+            state["empty_rise_base"] = price
+            msgs.append((
+                f"空仓上涨提醒：累计上涨 {rise_pct:.2%}（现价 {price:.2f}）",
+                f"> 提醒基准价 {rise_base:.2f} → 现价 {price:.2f}\n"
+                f"> 当前空仓，下一上涨提醒价：{price * (1 + EMPTY_RISE_ALERT_PCT):.2f}\n"
+                f"> 回落买入触发价：{state['anchor'] * (1 - GRID_STEP_PCT):.2f}",
+            ))
+    else:
+        state.pop("empty_rise_base", None)
 
     sellable = [lot for lot in lots if price >= sell_target(lot["price"])]
     if sellable:
@@ -253,6 +322,7 @@ def process_tick(price, state):
         lots = state["lots"]
         if not lots:
             state["anchor"] = price
+            state["empty_rise_base"] = price
         msgs.append((
             f"卖出提醒：{len(sellable)} 份可获利了结（现价 {price:.2f}）",
             "\n".join(lines)
@@ -271,6 +341,7 @@ def process_tick(price, state):
         if count > 0:
             for _ in range(count):
                 lots.append({"price": price, "time": datetime.now().strftime("%Y-%m-%d %H:%M")})
+            state.pop("empty_rise_base", None)
             state.pop("full_warned", None)
             msgs.append((
                 f"买入提醒：下跌 {(ref - price) / ref * 100:.2f}%，建议买入 {count} 份（现价 {price:.2f}）",
@@ -292,8 +363,15 @@ def process_tick(price, state):
 def position_summary(state, price):
     lots = state.get("lots", [])
     if not lots:
-        anchor = state.get("anchor") or price
-        return f"> 当前空仓，锚点价 {anchor:.2f}"
+        anchor = state.get("anchor")
+        if anchor is None:
+            return "> 当前空仓，锚点将在下次成功取价后建立"
+        rise_base = state.get("empty_rise_base") or anchor
+        return (
+            f"> 当前空仓，锚点价 {anchor:.2f}\n"
+            f"> 下一上涨提醒价：{rise_base * (1 + EMPTY_RISE_ALERT_PCT):.2f}，"
+            f"回落买入触发价：{anchor * (1 - GRID_STEP_PCT):.2f}"
+        )
     nearest = min(sell_target(lot["price"]) for lot in lots)
     ref = lots[-1]["price"]
     return (
@@ -309,6 +387,11 @@ def _validate_state(state):
     anchor = state.get("anchor")
     if anchor is not None:
         state["anchor"] = _valid_price(anchor, "状态", "anchor")
+    empty_rise_base = state.get("empty_rise_base")
+    if empty_rise_base is not None:
+        state["empty_rise_base"] = _valid_price(
+            empty_rise_base, "状态", "empty_rise_base"
+        )
     lots = state.get("lots")
     if not isinstance(lots, list):
         raise ValueError("状态 lots 必须是数组")
@@ -405,6 +488,8 @@ def cmd_status():
     try:
         price, yesterday, source = fetch_price()
         head = f"> 当前价：{price:.2f} 元/克（日内 {price - yesterday:+.2f}，来源：{source}）\n"
+    except MarketClosedError as exc:
+        price, head = None, f"> 行情请求已暂停：{exc}\n"
     except Exception as exc:
         price, head = None, f"> 取价失败：{exc}\n"
     print((head + position_summary(state, price or 0)).replace("> ", ""))
@@ -424,6 +509,7 @@ def cmd_bought(price, count):
                 "time": datetime.now().strftime("%Y-%m-%d %H:%M"),
                 "manual": True,
             })
+        state.pop("empty_rise_base", None)
         _save_state_unlocked(state)
     notify(
         f"已记录买入：{count} 份 @ {price:.2f}",
@@ -452,6 +538,9 @@ def cmd_sold(target):
                 return
             removed = [lot]
             lots.remove(lot)
+        if not state["lots"]:
+            state["anchor"] = None
+            state.pop("empty_rise_base", None)
         _save_state_unlocked(state)
     notify(
         f"已移除持仓 {len(removed)} 份",
@@ -498,41 +587,62 @@ def main():
     if args.cmd == "clear":
         return cmd_clear()
     if args.test:
-        price, _, source = fetch_price()
         if not (WECOM_WEBHOOK or SERVERCHAN_SENDKEY):
             raise RuntimeError("未配置通知渠道，无法执行通知测试")
-        notify("积存金监控测试", f"当前价格 {price:.2f} 元/克，来源：{source}，通知链路正常。")
+        try:
+            price, _, source = fetch_price()
+            content = f"当前价格 {price:.2f} 元/克，来源：{source}，通知链路正常。"
+        except MarketClosedError as exc:
+            content = f"{exc}；未请求行情接口，通知链路正常。"
+        notify("积存金监控测试", content)
         return
 
     min_move = sell_target(1.0) - 1.0
     log(
-        f"启动监控：买入步长 {GRID_STEP_PCT:.1%}，手续费 买{BUY_FEE_RATE:.1%}/卖{SELL_FEE_RATE:.1%}，"
-        f"单份获利需上涨 ≥{min_move:.2%}"
+        f"启动监控：买入步长 {GRID_STEP_PCT:.1%}，空仓上涨提醒 {EMPTY_RISE_ALERT_PCT:.1%}，"
+        f"手续费 买{BUY_FEE_RATE:.1%}/卖{SELL_FEE_RATE:.1%}，单份获利需上涨 ≥{min_move:.2%}，"
+        f"取价时段 工作日 {PRICE_REQUEST_START:%H:%M}-{PRICE_REQUEST_END:%H:%M}"
     )
     if not (WECOM_WEBHOOK or SERVERCHAN_SENDKEY):
         log("警告：未在脚本配置区设置 WECOM_WEBHOOK 或 SERVERCHAN_SENDKEY")
 
+    closed_reason = None
     try:
         price, yesterday, source = fetch_price()
+    except MarketClosedError as exc:
+        price = yesterday = source = None
+        closed_reason = str(exc)
+        log(f"行情请求已暂停：{closed_reason}")
     except Exception as exc:
         price = yesterday = source = None
         log(f"启动取价失败: {exc}")
 
     with state_lock():
         state = _load_state_unlocked()
-        if price is not None and not state["lots"] and (
-            state["anchor"] is None or price > state["anchor"]
-        ):
-            state["anchor"] = price
-            _save_state_unlocked(state)
+        if price is not None and not state["lots"]:
+            before = json.dumps(state, ensure_ascii=False, sort_keys=True)
+            anchor = state.get("anchor")
+            if state.get("empty_rise_base") is None:
+                state["empty_rise_base"] = anchor if anchor is not None else price
+            if anchor is None or price > anchor:
+                state["anchor"] = price
+            after = json.dumps(state, ensure_ascii=False, sort_keys=True)
+            if after != before:
+                _save_state_unlocked(state)
 
     if price is not None:
         notify(
             "积存金监控已启动",
             f"> 当前价：{price:.2f} 元/克（日内 {price - yesterday:+.2f}，来源：{source}）\n"
             f"{position_summary(state, price)}\n"
-            f"> 买入步长 {GRID_STEP_PCT:.1%}｜手续费 买{BUY_FEE_RATE:.1%} 卖{SELL_FEE_RATE:.1%}｜"
+            f"> 买入步长 {GRID_STEP_PCT:.1%}｜空仓上涨提醒 {EMPTY_RISE_ALERT_PCT:.1%}｜"
+            f"手续费 买{BUY_FEE_RATE:.1%} 卖{SELL_FEE_RATE:.1%}｜"
             f"单份获利需涨 ≥{min_move:.2%}",
+        )
+    elif closed_reason:
+        notify(
+            "积存金监控已启动",
+            f"> 行情请求已暂停：{closed_reason}\n{position_summary(state, 0)}",
         )
     else:
         notify("积存金监控已启动", "> 启动取价失败，稍后自动重试")
@@ -540,10 +650,23 @@ def main():
     failure_count = 0
     tick_count = 0
     delay = POLL_INTERVAL
+    closed_until = next_price_request_time() if closed_reason else None
     while True:
         time.sleep(delay)
+        now = datetime.now()
+        if not is_price_request_allowed(now):
+            next_open = next_price_request_time(now)
+            if next_open != closed_until:
+                log(f"行情请求已暂停：{market_closed_message(now)}")
+            closed_until = next_open
+            failure_count = 0
+            delay = POLL_INTERVAL
+            continue
+        if closed_until is not None:
+            log("已进入取价时段，恢复请求黄金行情")
+            closed_until = None
         try:
-            price, yesterday, source = fetch_price()
+            price, yesterday, source = fetch_price(now)
         except Exception as exc:
             failure_count += 1
             delay = min(POLL_INTERVAL * (2 ** min(failure_count, 5)), MAX_BACKOFF)

@@ -2,6 +2,7 @@ import math
 import tempfile
 import threading
 import unittest
+from datetime import datetime
 from pathlib import Path
 from unittest import mock
 
@@ -33,6 +34,35 @@ class GridLogicTests(unittest.TestCase):
 
         self.assertEqual(gm.process_tick(904.0, state), [])
         self.assertEqual(state["anchor"], 905.0)
+
+    def test_empty_position_rise_alert_repeats_from_last_alert_price(self):
+        state = {"anchor": 900.0, "lots": []}
+        first_trigger = 900.0 * (1 + gm.EMPTY_RISE_ALERT_PCT)
+
+        self.assertEqual(gm.process_tick(first_trigger - 0.01, state), [])
+        first_messages = gm.process_tick(first_trigger, state)
+
+        self.assertEqual(len(first_messages), 1)
+        self.assertIn("空仓上涨提醒", first_messages[0][0])
+        self.assertEqual(state["empty_rise_base"], first_trigger)
+
+        second_trigger = first_trigger * (1 + gm.EMPTY_RISE_ALERT_PCT)
+        self.assertEqual(gm.process_tick(second_trigger - 0.01, state), [])
+        self.assertEqual(len(gm.process_tick(second_trigger, state)), 1)
+        self.assertEqual(state["empty_rise_base"], second_trigger)
+
+    def test_empty_position_drop_does_not_send_opposite_rise_alert(self):
+        state = {
+            "anchor": 950.0,
+            "empty_rise_base": 900.0,
+            "lots": [],
+        }
+
+        messages = gm.process_tick(938.0, state)
+
+        self.assertEqual(len(messages), 1)
+        self.assertIn("买入提醒", messages[0][0])
+        self.assertNotIn("empty_rise_base", state)
 
     def test_drop_across_multiple_grids_adds_multiple_lots(self):
         state = {"anchor": 1000.0, "lots": []}
@@ -140,7 +170,45 @@ class FetchTests(unittest.TestCase):
             mock.patch.object(gm, "fetch_price_jd", side_effect=RuntimeError("down")),
             mock.patch.object(gm, "fetch_price_sina", return_value=(871.0, 869.0)),
         ):
-            self.assertEqual(gm.fetch_price(), (871.0, 869.0, "新浪"))
+            self.assertEqual(
+                gm.fetch_price(datetime(2026, 8, 5, 12, 0)),
+                (871.0, 869.0, "新浪"),
+            )
+
+
+class RequestScheduleTests(unittest.TestCase):
+    def test_only_weekdays_between_9_and_22_are_allowed(self):
+        self.assertFalse(gm.is_price_request_allowed(datetime(2026, 8, 7, 8, 59)))
+        self.assertTrue(gm.is_price_request_allowed(datetime(2026, 8, 7, 9, 0)))
+        self.assertTrue(gm.is_price_request_allowed(datetime(2026, 8, 7, 21, 59)))
+        self.assertFalse(gm.is_price_request_allowed(datetime(2026, 8, 7, 22, 0)))
+        self.assertFalse(gm.is_price_request_allowed(datetime(2026, 8, 8, 12, 0)))
+
+    def test_next_request_time_skips_weekend(self):
+        self.assertEqual(
+            gm.next_price_request_time(datetime(2026, 8, 7, 22, 0)),
+            datetime(2026, 8, 10, 9, 0),
+        )
+        self.assertEqual(
+            gm.next_price_request_time(datetime(2026, 8, 10, 8, 0)),
+            datetime(2026, 8, 10, 9, 0),
+        )
+
+    def test_fetch_does_not_call_either_source_while_closed(self):
+        with (
+            mock.patch.object(gm, "fetch_price_jd") as fetch_jd,
+            mock.patch.object(gm, "fetch_price_sina") as fetch_sina,
+        ):
+            for closed_at in (
+                datetime(2026, 8, 7, 22, 0),
+                datetime(2026, 8, 8, 12, 0),
+            ):
+                with self.subTest(closed_at=closed_at):
+                    with self.assertRaises(gm.MarketClosedError):
+                        gm.fetch_price(closed_at)
+
+        fetch_jd.assert_not_called()
+        fetch_sina.assert_not_called()
 
 
 if __name__ == "__main__":

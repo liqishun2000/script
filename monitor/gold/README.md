@@ -34,6 +34,7 @@ BUY_FEE_RATE = 0.0
 SELL_FEE_RATE = 0.005
 MIN_PROFIT_RATE = 0.01
 GRID_STEP_PCT = 0.012
+EMPTY_RISE_ALERT_PCT = 0.012
 LOT_GRAMS = 2
 MAX_LOTS = 10
 ```
@@ -44,6 +45,7 @@ MAX_LOTS = 10
 | `SELL_FEE_RATE` | `0.005` | 卖出或赎回手续费率，当前为 0.5%。 |
 | `MIN_PROFIT_RATE` | `0.01` | 扣除手续费后要求的最低净利润率，当前为 1%。 |
 | `GRID_STEP_PCT` | `0.012` | 买入网格间距，当前每跌 1.2% 触发一格。 |
+| `EMPTY_RISE_ALERT_PCT` | `0.012` | 空仓上涨提醒间距，当前每累计上涨 1.2% 提醒一次。 |
 | `LOT_GRAMS` | `2` | 每份克数，仅用于通知里的预计利润金额。 |
 | `MAX_LOTS` | `10` | 最大持仓份数，防止单边下跌时无限补仓。 |
 
@@ -55,6 +57,8 @@ MAX_LOTS = 10
 POLL_INTERVAL = 30
 MAX_BACKOFF = 900
 HEARTBEAT_TICKS = 10
+PRICE_REQUEST_START = clock_time(9, 0)
+PRICE_REQUEST_END = clock_time(22, 0)
 ```
 
 | 参数 | 当前值 | 含义 |
@@ -62,6 +66,8 @@ HEARTBEAT_TICKS = 10
 | `POLL_INTERVAL` | `30` | 正常情况下每 30 秒取价一次，最小允许值为 5 秒。 |
 | `MAX_BACKOFF` | `900` | 连续取价失败时，最长等待 900 秒，也就是 15 分钟。 |
 | `HEARTBEAT_TICKS` | `10` | 每成功取价 10 次，记录一条正常行情心跳日志。 |
+| `PRICE_REQUEST_START` | `09:00` | 工作日开始请求黄金行情的时间，包含 09:00。 |
+| `PRICE_REQUEST_END` | `22:00` | 工作日停止请求黄金行情的时间，不包含 22:00。 |
 
 ### 3.3 心跳频率用来做什么
 
@@ -110,6 +116,8 @@ SERVERCHAN_SENDKEY = ""
 
 空仓时，`anchor` 是买入锚点。价格上涨时锚点跟随上涨，价格下跌时锚点不下移。
 
+`empty_rise_base` 单独记录空仓上涨提醒的基准价。价格相对该基准累计上涨达到 `EMPTY_RISE_ALERT_PCT` 时发送一次“空仓上涨提醒”，随后以本次价格作为新基准继续累计。这个提醒不会建立虚拟持仓，也不会改变回落买入规则。
+
 首次买入触发价：
 
 ```text
@@ -154,16 +162,13 @@ anchor × (1 - GRID_STEP_PCT)
 ```json
 {
   "anchor": 900.92,
-  "lots": [
-    {
-      "price": 889.53,
-      "time": "2026-07-13 09:26"
-    }
-  ]
+  "empty_rise_base": 900.92,
+  "lots": []
 }
 ```
 
 - `anchor`：空仓时使用的最高跟随锚点。
+- `empty_rise_base`：空仓上涨提醒的最近基准价；持仓期间可能不存在。
 - `lots`：每笔持仓记录。
 - `price`：该笔买入价。
 - `time`：记录时间。
@@ -180,6 +185,8 @@ anchor × (1 - GRID_STEP_PCT)
 
 1. 京东金融积存金接口：`ms.jr.jd.com`。
 2. 京东失败后切换新浪 Au(T+D)：`hq.sinajs.cn`。
+
+脚本按运行电脑的本地时间，只在周一至周五的 `[09:00, 22:00)` 请求行情。周末、每天 22:00 至次日 09:00 会在本地判断为休市，不访问京东或新浪接口；到下一个允许时段后自动恢复。这里仅按星期和时间判断，不包含法定节假日休市表。
 
 日志和通知会注明当前使用“京东”还是“新浪”。两个报价品种并不完全相同，备用源主要用于主接口短时不可用；极端情况下需要人工核对报价差异。
 
