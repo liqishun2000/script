@@ -40,7 +40,11 @@ def _get_json(url: str, params: dict, retries: int = 4) -> dict:
     for i in range(retries):
         try:
             r = requests.get(url, params=params, timeout=8, headers=_HEADERS)
-            return r.json() or {}
+            r.raise_for_status()
+            payload = r.json() or {}
+            if not isinstance(payload, dict):
+                raise ValueError("行情服务返回了非对象 JSON。")
+            return payload
         except Exception as exc:  # noqa: BLE001
             last = exc
             _t.sleep(0.5 * (i + 1))  # 递增退避
@@ -76,7 +80,8 @@ def fetch_index_spot() -> List[dict]:
 def _fetch_spot_push2() -> List[dict]:
     secids = ",".join(i["secid"] for i in MAJOR_INDICES)
     params = {"secids": secids, "fields": _SPOT_FIELDS, "fltt": "2", "np": "1"}
-    diff = _get_json(_QUOTE_URL, params, retries=2).get("data", {}).get("diff", []) or []
+    data = _get_json(_QUOTE_URL, params, retries=2).get("data") or {}
+    diff = data.get("diff", []) or []
 
     name_map = _secid_map()
     result = []
@@ -106,6 +111,7 @@ def _fetch_spot_sina() -> List[dict]:
     """新浪行情备用源。A 股与美股字段格式不同，分别解析。"""
     symbols = ",".join(i["sina"] for i in MAJOR_INDICES)
     r = requests.get(_SINA_URL.format(symbols=symbols), timeout=8, headers=_SINA_HEADERS)
+    r.raise_for_status()
     r.encoding = "gbk"
     text = r.text
     result = []
@@ -146,7 +152,8 @@ def fetch_index_detail(code: str) -> dict:
     if not meta:
         raise ValueError(f"未知指数代码: {code}")
     params = {"secids": meta["secid"], "fields": _SPOT_FIELDS, "fltt": "2", "np": "1"}
-    diff = _get_json(_QUOTE_URL, params).get("data", {}).get("diff", []) or []
+    data = _get_json(_QUOTE_URL, params).get("data") or {}
+    diff = data.get("diff", []) or []
     if not diff:
         raise ValueError(f"未获取到指数 {code} 行情。")
     d = diff[0]
@@ -186,13 +193,16 @@ def fetch_index_history(code: str, days: int = 30) -> pd.DataFrame:
         "end": "20500101",
         "lmt": str(days),
     }
-    klines = _get_json(_KLINE_URL, params).get("data", {}).get("klines", []) or []
+    data = _get_json(_KLINE_URL, params).get("data") or {}
+    klines = data.get("klines", []) or []
     if not klines:
         return pd.DataFrame()
 
     rows = []
     for line in klines:
         parts = line.split(",")
+        if len(parts) < 5:
+            continue
         rows.append({
             "date": parts[0],
             "open": _num(parts[1]),

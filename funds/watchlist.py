@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import List
 
 from . import storage
+from .validation import normalize_fund_code
 
 _FILE = "watchlist.json"
 _DEFAULT = ["000001", "110022", "519066"]
@@ -20,20 +21,46 @@ def get_watchlist() -> List[str]:
     if data is None:
         storage.save_json(_FILE, _DEFAULT)
         return list(_DEFAULT)
-    return [str(c).zfill(6) for c in data]
+    if not isinstance(data, list):
+        return []
+    codes = []
+    for value in data:
+        try:
+            code = normalize_fund_code(value)
+        except ValueError:
+            continue
+        if code not in codes:
+            codes.append(code)
+    return codes
 
 
 def add_fund(code: str) -> List[str]:
-    code = str(code).strip().zfill(6)
-    codes = get_watchlist()
-    if code not in codes:
-        codes.append(code)
-        storage.save_json(_FILE, codes)
-    return codes
+    code = normalize_fund_code(code)
+
+    def update(codes):
+        if not isinstance(codes, list):
+            codes = []
+        normalized = []
+        for value in codes:
+            try:
+                item = normalize_fund_code(value)
+            except ValueError:
+                continue
+            if item not in normalized:
+                normalized.append(item)
+        if code not in normalized:
+            normalized.append(code)
+        return normalized
+
+    return storage.update_json(_FILE, [], update)
 
 
 def remove_fund(code: str) -> List[str]:
-    code = str(code).strip().zfill(6)
-    codes = [c for c in get_watchlist() if c != code]
-    storage.save_json(_FILE, codes)
-    return codes
+    code = normalize_fund_code(code)
+
+    def update(codes):
+        if not isinstance(codes, list):
+            return []
+        return [c for c in codes if str(c).zfill(6) != code]
+
+    return storage.update_json(_FILE, [], update)

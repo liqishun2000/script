@@ -10,35 +10,48 @@ import datetime as _dt
 from typing import Dict, Set
 
 from . import storage
+from .validation import normalize_fund_code
 
 _FILE = "dead_funds.json"
 
 
 def _all() -> Dict[str, dict]:
-    return storage.load_json(_FILE, {})
+    data = storage.load_json(_FILE, {})
+    return data if isinstance(data, dict) else {}
 
 
-def mark_dead(code: str, reason: str = "无净值数据") -> None:
-    code = str(code).strip().zfill(6)
-    data = _all()
-    if code not in data:
+def mark_dead(code: str, reason: str = "已人工确认失效") -> None:
+    """Record a manually confirmed invalid fund.
+
+    Provider failures must never call this function. Legacy records without the
+    ``confirmed`` flag are intentionally ignored by ``dead_set``.
+    """
+    code = normalize_fund_code(code)
+
+    def update(data):
         data[code] = {
             "reason": reason,
             "date": _dt.date.today().strftime("%Y-%m-%d"),
+            "confirmed": True,
         }
-        storage.save_json(_FILE, data)
+        return data
+
+    storage.update_json(_FILE, {}, update)
 
 
 def is_dead(code: str) -> bool:
-    return str(code).strip().zfill(6) in _all()
+    return normalize_fund_code(code) in dead_set()
 
 
 def dead_set() -> Set[str]:
-    return set(_all().keys())
+    return {
+        code for code, record in _all().items()
+        if isinstance(record, dict) and record.get("confirmed") is True
+    }
 
 
 def count() -> int:
-    return len(_all())
+    return len(dead_set())
 
 
 def clear() -> None:

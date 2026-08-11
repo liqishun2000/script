@@ -12,11 +12,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Dict, Optional
+from dataclasses import dataclass, replace
+from typing import Dict, List, Optional
 
 from . import storage, trade_log
 from .strategy import SignalReport
+from .validation import non_negative_number, normalize_fund_code
 
 _CONFIG_FILE = "config.json"
 
@@ -50,17 +51,29 @@ class PositionAdvice:
 
 def get_total_capital() -> float:
     cfg = storage.load_json(_CONFIG_FILE, {})
-    return float(cfg.get("total_capital", 0.0))
+    if not isinstance(cfg, dict):
+        return 0.0
+    try:
+        return non_negative_number(cfg.get("total_capital", 0.0), "总资金")
+    except ValueError:
+        return 0.0
 
 
 def set_total_capital(amount: float) -> None:
-    cfg = storage.load_json(_CONFIG_FILE, {})
-    cfg["total_capital"] = float(amount)
-    storage.save_json(_CONFIG_FILE, cfg)
+    amount = non_negative_number(amount, "总资金")
+
+    def update(cfg):
+        if not isinstance(cfg, dict):
+            cfg = {}
+        cfg["total_capital"] = amount
+        return cfg
+
+    storage.update_json(_CONFIG_FILE, {}, update)
 
 
 def current_value(fund_code: str, latest_nav: float) -> float:
     """根据交易记录推算的净份额 × 最新净值，得到当前持仓市值。"""
+    fund_code = normalize_fund_code(fund_code)
     summary = trade_log.holding_summary().get(fund_code)
     if not summary:
         return 0.0
@@ -163,6 +176,48 @@ def advise(report: SignalReport, total_capital: Optional[float] = None) -> Posit
         suggest_amount=amount,
         reason=reason,
     )
+
+
+def advise_many(
+    reports: List[SignalReport],
+    total_capital: Optional[float] = None,
+    reserved_value: float = 0.0,
+) -> Dict[str, PositionAdvice]:
+    """Build recommendations whose combined purchases stay within total capital."""
+    if total_capital is None:
+        total_capital = get_total_capital()
+    advice = {r.fund_code: advise(r, total_capital) for r in reports}
+    if total_capital <= 0:
+        return advice
+
+    reserved_value = non_negative_number(reserved_value, "未分析持仓市值")
+    current_total = reserved_value + sum(item.current_value for item in advice.values())
+    planned_sales = sum(
+        item.suggest_amount for item in advice.values()
+        if item.suggest_action in ("减仓", "清仓")
+    )
+    buy_items = [item for item in advice.values() if item.suggest_action == "加仓"]
+    requested = sum(item.suggest_amount for item in buy_items)
+    available = max(0.0, total_capital - current_total + planned_sales)
+    if requested <= available or requested <= 0:
+        return advice
+
+    scale = available / requested
+    for item in buy_items:
+        amount = item.suggest_amount * scale
+        if amount <= _MIN_TRADE_AMOUNT:
+            updated = replace(
+                item, suggest_action="维持", suggest_amount=0.0,
+                reason="组合可用资金不足，按总资金约束后本次不建议加仓。",
+            )
+        else:
+            updated = replace(
+                item, suggest_amount=amount,
+                reason=(f"组合资金不足，已按比例缩减；建议加仓 {amount:,.0f} 元，"
+                        "全部建议合计不超过总资金。"),
+            )
+        advice[item.fund_code] = updated
+    return advice
 
 
 def portfolio_overview(reports_navs: Dict[str, float]) -> dict:

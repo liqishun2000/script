@@ -16,12 +16,18 @@ import akshare as ak
 import pandas as pd
 import requests
 
+from .validation import normalize_fund_code
+
 
 class FundDataEmpty(ValueError):
     """基金返回空数据——通常意味着该基金已清盘/退市/代码无效。
 
     与普通网络异常区分开，便于上层判定是否将基金标记为"已失效"。
     """
+
+
+class FundDataUnavailable(RuntimeError):
+    """The remote provider could not return trustworthy fund data."""
 
 
 _NAV_COLUMN_MAP = {
@@ -32,10 +38,10 @@ _NAV_COLUMN_MAP = {
 }
 
 
-_PINGZHONG_URL = "http://fund.eastmoney.com/pingzhongdata/{code}.js"
+_PINGZHONG_URL = "https://fund.eastmoney.com/pingzhongdata/{code}.js"
 _NAV_TREND_RE = _re.compile(r"var Data_netWorthTrend\s*=\s*(\[.*?\]);", _re.S)
 _PINGZHONG_HEADERS = {
-    "Referer": "http://fund.eastmoney.com/",
+    "Referer": "https://fund.eastmoney.com/",
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
 }
 
@@ -49,21 +55,24 @@ def fetch_fund_nav(fund_code: str) -> pd.DataFrame:
 
     返回包含 ``date``/``nav``/``pct_change`` 的 DataFrame，按日期升序。
     """
-    code = str(fund_code).strip().zfill(6)
+    code = normalize_fund_code(fund_code)
     try:
         r = requests.get(_PINGZHONG_URL.format(code=code), timeout=8,
                          headers=_PINGZHONG_HEADERS)
-    except (requests.exceptions.ConnectionError, requests.exceptions.Timeout):
-        raise  # 网络问题：向上抛出，不据此判定基金失效
+        r.raise_for_status()
+    except requests.RequestException as exc:
+        raise FundDataUnavailable(f"基金 {code} 净值服务暂时不可用。") from exc
 
     m = _NAV_TREND_RE.search(r.text or "")
     if not m:
-        raise FundDataEmpty(f"基金 {code} 无净值数据（可能已清盘或代码无效）。")
+        raise FundDataUnavailable(f"基金 {code} 净值服务返回了未知格式。")
     try:
         arr = _json.loads(m.group(1))
     except _json.JSONDecodeError as exc:
-        raise FundDataEmpty(f"基金 {code} 净值数据解析失败。") from exc
+        raise FundDataUnavailable(f"基金 {code} 净值数据解析失败。") from exc
 
+    if not isinstance(arr, list):
+        raise FundDataUnavailable(f"基金 {code} 净值数据结构异常。")
     if not arr:
         raise FundDataEmpty(f"基金 {code} 无净值数据（可能已清盘或代码无效）。")
 
@@ -74,6 +83,8 @@ def fetch_fund_nav(fund_code: str) -> pd.DataFrame:
     df["pct_change"] = pd.to_numeric(df.get("equityReturn"), errors="coerce")
     df = df[["date", "nav", "pct_change"]].sort_values("date").reset_index(drop=True)
     df = df.dropna(subset=["nav"]).reset_index(drop=True)
+    if df.empty:
+        raise FundDataUnavailable(f"基金 {code} 净值数据不包含有效数值。")
     return df
 
 
@@ -98,14 +109,16 @@ def _build_fund_name_table() -> pd.DataFrame:
     cols = ["code", "name", "type"] if "type" in table.columns else ["code", "name"]
     if "type" not in table.columns:
         table["type"] = ""
+    table["code"] = table["code"].astype(str).str.strip().str.zfill(6)
     return table[["code", "name", "type"]].drop_duplicates("code")
 
 
 def fetch_fund_type(fund_code: str) -> str:
     """返回基金类型字符串（如 '混合型-偏股'），找不到返回空串。"""
+    code = normalize_fund_code(fund_code)
     try:
         table = _fund_name_table()
-        hit = table.loc[table["code"] == str(fund_code).zfill(6), "type"]
+        hit = table.loc[table["code"] == code, "type"]
         if not hit.empty:
             return str(hit.iloc[0])
     except Exception:
@@ -125,15 +138,16 @@ def is_equity_fund(fund_code: str) -> bool:
 
 def fetch_fund_name(fund_code: str) -> str:
     """根据基金代码返回基金中文简称，找不到则回退为代码本身。"""
+    code = normalize_fund_code(fund_code)
     try:
         table = _fund_name_table()
-        hit = table.loc[table["code"] == fund_code, "name"]
+        hit = table.loc[table["code"].astype(str) == code, "name"]
         if not hit.empty:
             return str(hit.iloc[0])
     except Exception:
         # 名称表只是辅助信息，失败时不影响主流程
         pass
-    return fund_code
+    return code
 
 
 def list_all_funds() -> pd.DataFrame:
@@ -203,10 +217,10 @@ def filter_funds_by_industry(df: pd.DataFrame, industry: str) -> pd.DataFrame:
 # 基金官方实时估值（天天基金 fundgz 接口，速度极快，养基宝同源）
 # --------------------------------------------------------------------------- #
 
-_FUNDGZ_URL = "http://fundgz.1234567.com.cn/js/{code}.js"
+_FUNDGZ_URL = "https://fundgz.1234567.com.cn/js/{code}.js"
 _FUNDGZ_RE = _re.compile(r"jsonpgz\((.*)\)\s*;?")
 _FUNDGZ_HEADERS = {
-    "Referer": "http://fund.eastmoney.com/",
+    "Referer": "https://fund.eastmoney.com/",
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
 }
 
@@ -217,15 +231,19 @@ def fetch_fund_estimate(fund_code: str, timeout: float = 5.0) -> Optional[Dict[s
     返回 dict: {name, dwjz(昨日净值), gsz(估算净值), gszzl(估算涨跌%), gztime(估值时间)}；
     货币基金或暂无估值时返回 None。
     """
-    code = str(fund_code).strip().zfill(6)
+    code = normalize_fund_code(fund_code)
     try:
         r = requests.get(_FUNDGZ_URL.format(code=code), timeout=timeout,
                          headers=_FUNDGZ_HEADERS)
+        r.raise_for_status()
         m = _FUNDGZ_RE.search(r.text)
         if not m:
             return None
         data = _json.loads(m.group(1))
-    except Exception:
+    except (requests.RequestException, _json.JSONDecodeError):
+        return None
+
+    if not isinstance(data, dict):
         return None
 
     gszzl = data.get("gszzl")
@@ -257,13 +275,13 @@ _HOLDING_COLUMN_MAP = {
 }
 
 
-@lru_cache(maxsize=128)
 def fetch_fund_holdings(fund_code: str, year: Optional[str] = None) -> pd.DataFrame:
     """获取基金最新一期的股票持仓明细。
 
     返回包含 ``stock_code``/``stock_name``/``weight``(占净值比例%) 的 DataFrame，
     只保留最新季度的数据，按占比降序。
     """
+    fund_code = normalize_fund_code(fund_code)
     if year is None:
         year = str(_dt.date.today().year)
 
@@ -279,10 +297,19 @@ def fetch_fund_holdings(fund_code: str, year: Optional[str] = None) -> pd.DataFr
     df["weight"] = pd.to_numeric(df["weight"], errors="coerce")
     # 只取最新季度
     if "quarter" in df.columns and df["quarter"].notna().any():
-        latest_quarter = df["quarter"].dropna().iloc[0]
-        df = df[df["quarter"] == latest_quarter]
+        quarters = df["quarter"].astype(str)
+        latest_quarter = max(
+            quarters[df["quarter"].notna()],
+            key=_quarter_sort_key,
+        )
+        df = df[quarters == latest_quarter]
     df = df.dropna(subset=["weight"]).sort_values("weight", ascending=False)
     return df.reset_index(drop=True)
+
+
+def _quarter_sort_key(value: str) -> tuple[int, int]:
+    match = _re.search(r"(\d{4}).*?([1-4])", value)
+    return (int(match.group(1)), int(match.group(2))) if match else (0, 0)
 
 
 def _stock_em_symbol(stock_code: str) -> str:
@@ -321,6 +348,9 @@ def estimate_fund_intraday_change(
         - covered_weight: 参与估算的持仓占净值比例之和(%)
         - details: 每只重仓股的 [代码, 名称, 占比, 当日涨跌] 明细
     """
+    fund_code = normalize_fund_code(fund_code)
+    if not isinstance(top_n, int) or not 1 <= top_n <= 100:
+        raise ValueError("重仓股数量必须是 1 到 100 的整数。")
     holdings = fetch_fund_holdings(fund_code)
     result: Dict[str, object] = {
         "estimate_pct": None,

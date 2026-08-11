@@ -2,6 +2,7 @@
 
 from .data_fetcher import (
     FundDataEmpty,
+    FundDataUnavailable,
     estimate_fund_intraday_change,
     fetch_fund_estimate,
     fetch_fund_holdings,
@@ -28,6 +29,7 @@ __all__ = [
     "list_industries",
     "filter_funds_by_industry",
     "FundDataEmpty",
+    "FundDataUnavailable",
     "compute_indicators",
     "evaluate_signals",
     "SignalReport",

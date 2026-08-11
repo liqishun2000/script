@@ -35,9 +35,11 @@ def _add_rsi(df: pd.DataFrame, period: int = 14) -> None:
     loss = (-delta).clip(lower=0)
     avg_gain = gain.ewm(alpha=1 / period, adjust=False).mean()
     avg_loss = loss.ewm(alpha=1 / period, adjust=False).mean()
-    rs = avg_gain / avg_loss.replace(0, np.nan)
-    df["rsi"] = 100 - 100 / (1 + rs)
-    df["rsi"] = df["rsi"].fillna(50)
+    rs = avg_gain / avg_loss.where(avg_loss != 0)
+    rsi = 100 - 100 / (1 + rs)
+    rsi = rsi.mask((avg_loss == 0) & (avg_gain > 0), 100.0)
+    rsi = rsi.mask((avg_loss == 0) & (avg_gain == 0), 50.0)
+    df["rsi"] = rsi.fillna(50.0)
 
 
 def _add_bollinger(df: pd.DataFrame, period: int = 20, k: float = 2.0) -> None:

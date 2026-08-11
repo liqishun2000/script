@@ -13,6 +13,7 @@ import uuid
 from typing import Dict, List, Optional
 
 from . import storage
+from .validation import normalize_fund_code, positive_number
 
 _FILE = "trades.json"
 
@@ -21,7 +22,8 @@ SELL = "卖出"
 
 
 def _all() -> List[dict]:
-    return storage.load_json(_FILE, [])
+    data = storage.load_json(_FILE, [])
+    return data if isinstance(data, list) else []
 
 
 def add_trade(
@@ -37,13 +39,19 @@ def add_trade(
     amount: 本次操作金额（元）；nav: 成交时净值；
     份额按 amount/nav 估算（赎回时为卖出份额估算）。
     """
-    fund_code = str(fund_code).strip().zfill(6)
+    fund_code = normalize_fund_code(fund_code)
     if action not in (BUY, SELL):
         raise ValueError("action 必须是 买入 或 卖出")
+    amount = positive_number(amount, "交易金额")
+    nav = positive_number(nav, "成交净值")
     if date is None:
         date = _dt.date.today().strftime("%Y-%m-%d")
+    try:
+        date = _dt.date.fromisoformat(str(date)).isoformat()
+    except ValueError as exc:
+        raise ValueError("交易日期必须使用 YYYY-MM-DD 格式。") from exc
 
-    shares = amount / nav if nav else 0.0
+    shares = amount / nav
     record = {
         "id": uuid.uuid4().hex[:12],
         "date": date,
@@ -51,25 +59,45 @@ def add_trade(
         "action": action,
         "amount": round(float(amount), 2),
         "nav": float(nav),
-        "shares": round(shares, 4),
-        "note": note,
+        "shares": round(shares, 8),
+        "note": str(note),
     }
-    trades = _all()
-    trades.append(record)
-    storage.save_json(_FILE, trades)
+
+    def update(trades):
+        if not isinstance(trades, list):
+            trades = []
+        if action == SELL:
+            held = _shares_for_code(trades, fund_code)
+            if shares > held + 1e-8:
+                raise ValueError(
+                    f"卖出份额 {shares:.4f} 超过当前持有份额 {held:.4f}。"
+                )
+        trades.append(record)
+        return trades
+
+    storage.update_json(_FILE, [], update)
     return record
 
 
 def delete_trade(trade_id: str) -> None:
-    trades = [t for t in _all() if t.get("id") != trade_id]
-    storage.save_json(_FILE, trades)
+    def update(trades):
+        removed = next((t for t in trades if t.get("id") == trade_id), None)
+        remaining = [t for t in trades if t.get("id") != trade_id]
+        if removed is not None:
+            code = removed.get("fund_code")
+            raw_balance = _raw_shares_for_code(remaining, code)
+            if raw_balance < -1e-8:
+                raise ValueError("不能删除该记录，否则卖出份额将超过持仓。")
+        return remaining
+
+    storage.update_json(_FILE, [], update)
 
 
 def list_trades(fund_code: Optional[str] = None) -> List[dict]:
     """返回交易记录，按日期升序；可按基金代码过滤。"""
     trades = _all()
     if fund_code:
-        fund_code = str(fund_code).strip().zfill(6)
+        fund_code = normalize_fund_code(fund_code)
         trades = [t for t in trades if t.get("fund_code") == fund_code]
     return sorted(trades, key=lambda t: (t.get("date", ""), t.get("id", "")))
 
@@ -91,16 +119,21 @@ def holding_summary() -> Dict[str, dict]:
         code = t["fund_code"]
         s = summary.setdefault(
             code,
-            {"shares": 0.0, "cost": 0.0, "buy_amount": 0.0, "sell_amount": 0.0},
+            {"shares": 0.0, "cost": 0.0, "buy_amount": 0.0,
+             "sell_amount": 0.0, "realized_pnl": 0.0},
         )
         if t["action"] == BUY:
             s["shares"] += t["shares"]
             s["cost"] += t["amount"]
             s["buy_amount"] += t["amount"]
         else:
-            s["shares"] -= t["shares"]
-            s["cost"] -= t["amount"]
+            held = max(s["shares"], 0.0)
+            sold = min(float(t["shares"]), held)
+            removed_cost = (s["cost"] / held * sold) if held else 0.0
+            s["shares"] -= float(t["shares"])
+            s["cost"] = max(0.0, s["cost"] - removed_cost)
             s["sell_amount"] += t["amount"]
+            s["realized_pnl"] += t["amount"] - removed_cost
 
     # 清理浮点误差导致的极小负份额
     for s in summary.values():
@@ -109,3 +142,17 @@ def holding_summary() -> Dict[str, dict]:
         if s["cost"] < 0:
             s["cost"] = 0.0
     return summary
+
+
+def _shares_for_code(trades: List[dict], fund_code: str) -> float:
+    return max(0.0, _raw_shares_for_code(trades, fund_code))
+
+
+def _raw_shares_for_code(trades: List[dict], fund_code: str) -> float:
+    shares = 0.0
+    for trade in trades:
+        if trade.get("fund_code") != fund_code:
+            continue
+        value = float(trade.get("shares", 0.0))
+        shares += value if trade.get("action") == BUY else -value
+    return shares

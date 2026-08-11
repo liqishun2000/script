@@ -70,7 +70,7 @@ def _append_estimate_point(nav_df, est_dict):
     return _pd.concat([nav_df, _pd.DataFrame([row])], ignore_index=True)
 
 
-def _analyze_one_fund(code: str, total_capital: float, with_estimate: bool,
+def _analyze_one_fund(code: str, with_estimate: bool,
                       market: dict | None = None) -> dict:
     """分析单只基金（供线程池调用）。失败的空数据基金会被登记为已清盘。"""
     try:
@@ -95,13 +95,11 @@ def _analyze_one_fund(code: str, total_capital: float, with_estimate: bool,
 
         report = evaluate_signals(ind, code, name,
                                   market_score=mkt_score, market_detail=mkt_detail)
-        adv = portfolio.advise(report, total_capital)
         last = trade_log.last_trade(code)
-        return {"code": code, "report": report, "adv": adv,
+        return {"code": code, "report": report,
                 "est": est, "last": last, "error": None}
     except FundDataEmpty:
-        dead_funds.mark_dead(code, "无净值数据")
-        return {"code": code, "error": "已清盘/无数据", "dead": True}
+        return {"code": code, "error": "该数据源暂无可用净值"}
     except Exception as exc:  # noqa: BLE001
         return {"code": code, "error": str(exc)}
 
@@ -114,7 +112,7 @@ class FundApp(tk.Tk):
         self.minsize(960, 600)
 
         self._task_queue: "queue.Queue" = queue.Queue()
-        self._busy = False
+        self._active_tasks = 0
         self._scoring = False
         self._all_funds = None  # 全市场基金列表缓存 (DataFrame)
         self._detail_windows: dict = {}
@@ -193,10 +191,13 @@ class FundApp(tk.Tk):
 
     def _on_refresh_indices(self) -> None:
         self.idx_refresh_btn.config(state="disabled")
-        self._run_async(market.fetch_index_spot, self._on_indices_done)
+        self._run_async(
+            market.fetch_index_spot,
+            self._on_indices_done,
+            on_finally=lambda: self.idx_refresh_btn.config(state="normal"),
+        )
 
     def _on_indices_done(self, rows) -> None:
-        self.idx_refresh_btn.config(state="normal")
         for item in self.idx_tree.get_children():
             self.idx_tree.delete(item)
         for r in rows:
@@ -354,10 +355,13 @@ class FundApp(tk.Tk):
     def _on_load_all_funds(self) -> None:
         self.all_load_btn.config(state="disabled")
         self.all_count_var.set("正在加载全市场基金列表…")
-        self._run_async(data_fetcher.list_all_funds, self._on_all_funds_loaded)
+        self._run_async(
+            data_fetcher.list_all_funds,
+            self._on_all_funds_loaded,
+            on_finally=lambda: self.all_load_btn.config(state="normal"),
+        )
 
     def _on_all_funds_loaded(self, df) -> None:
-        self.all_load_btn.config(state="normal")
         self._all_funds = df
         # 填充板块下拉
         try:
@@ -392,11 +396,18 @@ class FundApp(tk.Tk):
         # 关键字搜索
         kw = self.all_search_var.get().strip()
         if kw:
-            mask = df["code"].astype(str).str.contains(kw) | df["name"].astype(str).str.contains(kw)
+            mask = (
+                df["code"].astype(str).str.contains(kw, regex=False, na=False)
+                | df["name"].astype(str).str.contains(kw, regex=False, na=False)
+            )
             df = df[mask]
 
         total_match = len(df)
-        limit = int(self.all_limit_var.get())
+        try:
+            limit = max(1, int(self.all_limit_var.get()))
+        except (ValueError, tk.TclError):
+            limit = 300
+            self.all_limit_var.set(limit)
         df = df.head(limit)
 
         for _, row in df.iterrows():
@@ -433,11 +444,10 @@ class FundApp(tk.Tk):
         threading.Thread(target=self._score_all_worker, args=(codes,), daemon=True).start()
 
     def _score_all_worker(self, codes) -> None:
-        data_fetcher.fetch_fund_name("000001")  # 预热名称缓存，避免并发冷启动
         try:
-            mkt = market.market_sentiment()
+            data_fetcher.fetch_fund_name("000001")  # 预热名称缓存
         except Exception:
-            mkt = None
+            pass
         total = len(codes)
         counter = {"done": 0}
 
@@ -445,34 +455,27 @@ class FundApp(tk.Tk):
             try:
                 nav_df = data_fetcher.fetch_fund_nav(code)
                 ind = compute_indicators(nav_df)
-                mkt_score = None
-                if mkt is not None and data_fetcher.is_equity_fund(code):
-                    mkt_score = mkt.get("score")
-                report = evaluate_signals(ind, code, data_fetcher.fetch_fund_name(code),
-                                          market_score=mkt_score)
+                report = evaluate_signals(ind, code, data_fetcher.fetch_fund_name(code))
                 return item, report.composite_score, report.action
             except FundDataEmpty:
-                dead_funds.mark_dead(code, "无净值数据")
-                return item, None, "已清盘"
+                return item, None, "无净值"
             except Exception:  # noqa: BLE001
                 return item, None, "失败"
 
-        with ThreadPoolExecutor(max_workers=_MAX_WORKERS) as ex:
-            futs = [ex.submit(score_one, item, code) for item, code in codes]
-            for fut in as_completed(futs):
-                item, score, action = fut.result()
-                counter["done"] += 1
-                self._post(self._update_score_row, (item, score, action))
-                self._post(self._set_status, f"评分中 {counter['done']}/{total} …")
-        self._post(self._after_score_all, None)
+        try:
+            with ThreadPoolExecutor(max_workers=_MAX_WORKERS) as ex:
+                futs = [ex.submit(score_one, item, code) for item, code in codes]
+                for fut in as_completed(futs):
+                    item, score, action = fut.result()
+                    counter["done"] += 1
+                    self._post(self._update_score_row, (item, score, action))
+                    self._post(self._set_status, f"评分中 {counter['done']}/{total} …")
+        finally:
+            self._post(self._after_score_all, None)
 
     def _update_score_row(self, payload) -> None:
         item, score, action = payload
         if not self.all_tree.exists(item):
-            return
-        if action == "已清盘":
-            # 已登记为死基，直接从列表移除
-            self.all_tree.delete(item)
             return
         vals = list(self.all_tree.item(item, "values"))
         vals[2] = f"{score:+.2f}" if score is not None else "-"
@@ -566,7 +569,8 @@ class FundApp(tk.Tk):
         self.bt_tree.tag_configure("neg", foreground=_DOWN_COLOR)
 
         self.bt_summary = tk.StringVar(
-            value="选择基金后点击「开始回测」。回测按每日推荐操作模拟调仓，无未来函数。")
+            value=("选择基金后点击「开始回测」。信号按下一交易日净值成交，"
+                   "默认计 0.1% 换手成本。"))
         ttk.Label(tab, textvariable=self.bt_summary, style="Title.TLabel",
                   wraplength=1000, justify="left").pack(anchor="w", padx=10, pady=6)
 
@@ -581,7 +585,11 @@ class FundApp(tk.Tk):
         code = self.bt_add_var.get().strip()
         if not code:
             return
-        watchlist.add_fund(code)
+        try:
+            watchlist.add_fund(code)
+        except ValueError as exc:
+            messagebox.showerror("输入有误", str(exc))
+            return
         self.bt_add_var.set("")
         self._refresh_bt_list()
         self._refresh_watchlist_box()
@@ -594,14 +602,22 @@ class FundApp(tk.Tk):
             return
         for item in self.bt_tree.get_children():
             self.bt_tree.delete(item)
-        days = int(self.bt_days_var.get())
-        fwd = int(self.bt_fwd_var.get())
+        try:
+            days = int(self.bt_days_var.get())
+            fwd = int(self.bt_fwd_var.get())
+        except (ValueError, tk.TclError):
+            messagebox.showerror("输入有误", "回测天数和前瞻天数必须是整数。")
+            return
         self.bt_run_btn.config(state="disabled")
         self.bt_summary.set(f"回测中…（{len(codes)} 只，{days} 天）")
-        self._run_async(backtest.backtest_many, self._on_backtest_done, codes, days, fwd)
+        self._run_async(
+            backtest.backtest_many,
+            self._on_backtest_done,
+            codes, days, fwd,
+            on_finally=lambda: self.bt_run_btn.config(state="normal"),
+        )
 
     def _on_backtest_done(self, out) -> None:
-        self.bt_run_btn.config(state="normal")
         for r in out["results"]:
             if r.error:
                 self.bt_tree.insert("", tk.END, values=(
@@ -735,44 +751,53 @@ class FundApp(tk.Tk):
     # ------------------------------------------------------------------ #
     # 通用：后台任务调度
     # ------------------------------------------------------------------ #
-    def _run_async(self, func, on_done, *args) -> None:
-        """在后台线程跑 func，结果/异常通过队列回主线程交给 on_done。"""
-        if self._busy:
-            messagebox.showinfo("提示", "已有任务在执行，请稍候。")
-            return
-        self._busy = True
+    def _run_async(self, func, on_done, *args, on_finally=None) -> None:
+        """Run one independent task and marshal all UI work to the main thread."""
+        self._active_tasks += 1
         self._set_status("处理中…")
 
         def worker():
             try:
                 result = func(*args)
-                self._task_queue.put(("ok", on_done, result))
+                event = ("task", on_done, result, None, on_finally)
             except Exception as exc:  # noqa: BLE001
-                self._task_queue.put(("err", on_done, exc))
+                event = ("task", on_done, None, exc, on_finally)
+            self._task_queue.put(event)
 
         threading.Thread(target=worker, daemon=True).start()
 
     def _post(self, callback, payload=None) -> None:
         """从后台线程向主线程投递一次 UI 更新（不影响单飞任务的忙碌标志）。"""
-        self._task_queue.put(("ui", callback, payload))
+        self._task_queue.put(("ui", callback, payload, None, None))
 
     def _poll_queue(self) -> None:
         try:
             while True:
-                kind, callback, payload = self._task_queue.get_nowait()
-                if kind == "ui":
-                    # 进度类回调：不重置 _busy，不改状态栏
-                    callback(payload)
-                    continue
-                self._busy = False
-                self._set_status("就绪")
-                if kind == "ok":
-                    callback(payload)
-                else:
-                    messagebox.showerror("出错了", str(payload))
+                kind, callback, payload, error, on_finally = self._task_queue.get_nowait()
+                try:
+                    if error is not None:
+                        messagebox.showerror("出错了", str(error))
+                    else:
+                        callback(payload)
+                except Exception as exc:  # keep later async results flowing
+                    messagebox.showerror("界面更新失败", str(exc))
+                finally:
+                    if kind == "task":
+                        self._active_tasks = max(0, self._active_tasks - 1)
+                        if on_finally is not None:
+                            try:
+                                on_finally()
+                            except tk.TclError:
+                                pass
+                        if self._active_tasks == 0:
+                            self._set_status("就绪")
         except queue.Empty:
             pass
-        self.after(120, self._poll_queue)
+        finally:
+            try:
+                self.after(120, self._poll_queue)
+            except tk.TclError:
+                pass
 
     def _set_status(self, text: str) -> None:
         self.status.set(text)
@@ -789,7 +814,11 @@ class FundApp(tk.Tk):
         code = self.add_code_var.get().strip()
         if not code:
             return
-        watchlist.add_fund(code)
+        try:
+            watchlist.add_fund(code)
+        except ValueError as exc:
+            messagebox.showerror("输入有误", str(exc))
+            return
         self.add_code_var.set("")
         self._refresh_watchlist_box()
 
@@ -808,30 +837,61 @@ class FundApp(tk.Tk):
             self.tree.delete(item)
         with_intraday = self.intraday_var.get()
         self.analyze_btn.config(state="disabled")
-        self._run_async(self._analyze_funds, self._on_analyze_done, codes, with_intraday)
+        self._run_async(
+            self._analyze_funds,
+            self._on_analyze_done,
+            codes, with_intraday,
+            on_finally=lambda: self.analyze_btn.config(state="normal"),
+        )
 
     @staticmethod
     def _analyze_funds(codes, with_estimate):
         data_fetcher.fetch_fund_name("000001")  # 预热名称缓存，避免并发冷启动
         total_capital = portfolio.get_total_capital()
-        try:
-            mkt = market.market_sentiment()
-        except Exception:
-            mkt = None
         result_map = {}
         with ThreadPoolExecutor(max_workers=_MAX_WORKERS) as ex:
             futs = {
-                ex.submit(_analyze_one_fund, code, total_capital, with_estimate, mkt): code
+                ex.submit(_analyze_one_fund, code, with_estimate, None): code
                 for code in codes
             }
             for fut in as_completed(futs):
                 r = fut.result()
                 result_map[r["code"]] = r
+        successful = [r["report"] for r in result_map.values() if not r.get("error")]
+        analyzed_codes = {report.fund_code for report in successful}
+        other_holdings = {
+            code: item for code, item in trade_log.holding_summary().items()
+            if code not in analyzed_codes and item.get("shares", 0.0) > 0
+        }
+        reserved_value = 0.0
+        missing_holding_price = False
+        if other_holdings:
+            with ThreadPoolExecutor(max_workers=_MAX_WORKERS) as ex:
+                future_codes = {
+                    ex.submit(data_fetcher.fetch_fund_nav, code): code
+                    for code in other_holdings
+                }
+                for future in as_completed(future_codes):
+                    code = future_codes[future]
+                    try:
+                        nav_df = future.result()
+                        reserved_value += (
+                            other_holdings[code]["shares"] * float(nav_df.iloc[-1]["nav"])
+                        )
+                    except Exception:
+                        missing_holding_price = True
+        if missing_holding_price:
+            reserved_value = total_capital
+        advice = portfolio.advise_many(
+            successful, total_capital, reserved_value=reserved_value
+        )
+        for result in result_map.values():
+            if not result.get("error"):
+                result["adv"] = advice[result["code"]]
         # 按原始顺序返回
         return [result_map[c] for c in codes if c in result_map]
 
     def _on_analyze_done(self, results) -> None:
-        self.analyze_btn.config(state="normal")
         for r in results:
             if r.get("error"):
                 self.tree.insert("", tk.END, values=(
@@ -900,12 +960,21 @@ class FundApp(tk.Tk):
         if not code:
             messagebox.showinfo("提示", "请输入基金代码。")
             return
-        topn = int(self.hold_topn_var.get())
+        try:
+            topn = int(self.hold_topn_var.get())
+        except (ValueError, tk.TclError):
+            messagebox.showerror("输入有误", "重仓股数量必须是整数。")
+            return
         for item in self.hold_tree.get_children():
             self.hold_tree.delete(item)
         self.hold_summary.set("估算中…")
         self.hold_btn.config(state="disabled")
-        self._run_async(self._estimate_holdings, self._on_holdings_done, code, topn)
+        self._run_async(
+            self._estimate_holdings,
+            self._on_holdings_done,
+            code, topn,
+            on_finally=lambda: self.hold_btn.config(state="normal"),
+        )
 
     @staticmethod
     def _estimate_holdings(code, topn):
@@ -915,7 +984,6 @@ class FundApp(tk.Tk):
         return {"code": code, "name": name, "est": est}
 
     def _on_holdings_done(self, payload) -> None:
-        self.hold_btn.config(state="normal")
         est = payload["est"]
         details = est.get("details", [])
         if not details:
@@ -980,7 +1048,11 @@ class FundApp(tk.Tk):
         if not code:
             messagebox.showerror("输入有误", "请填写基金代码。")
             return
-        trade_log.add_trade(code, self.t_action.get(), amount, nav, self.t_note.get())
+        try:
+            trade_log.add_trade(code, self.t_action.get(), amount, nav, self.t_note.get())
+        except ValueError as exc:
+            messagebox.showerror("输入有误", str(exc))
+            return
         self.t_amount.set("")
         self.t_note.set("")
         self._refresh_trades_table()
@@ -991,7 +1063,11 @@ class FundApp(tk.Tk):
         if not item:
             return
         if messagebox.askyesno("确认", "确定删除选中的交易记录吗？"):
-            trade_log.delete_trade(item)
+            try:
+                trade_log.delete_trade(item)
+            except ValueError as exc:
+                messagebox.showerror("无法删除", str(exc))
+                return
             self._refresh_trades_table()
 
     # ------------------------------------------------------------------ #
@@ -1010,12 +1086,19 @@ class FundApp(tk.Tk):
         except ValueError:
             messagebox.showerror("输入有误", "请输入数字金额。")
             return
-        portfolio.set_total_capital(amount)
+        try:
+            portfolio.set_total_capital(amount)
+        except ValueError as exc:
+            messagebox.showerror("输入有误", str(exc))
+            return
         self._refresh_capital_view()
         self._set_status("已保存总仓位金额。")
 
     def _on_refresh_overview(self) -> None:
-        codes = list(trade_log.holding_summary().keys())
+        codes = [
+            code for code, item in trade_log.holding_summary().items()
+            if item.get("shares", 0.0) > 0
+        ]
         if not codes:
             self.overview_info.set("暂无持仓（交易记录为空）。")
             return
@@ -1024,15 +1107,24 @@ class FundApp(tk.Tk):
     @staticmethod
     def _compute_overview(codes):
         navs = {}
+        missing = []
         for c in codes:
             try:
                 df = data_fetcher.fetch_fund_nav(c)
                 navs[c] = float(df.iloc[-1]["nav"])
             except Exception:
-                navs[c] = 0.0
-        return portfolio.portfolio_overview(navs)
+                missing.append(c)
+        return {"overview": portfolio.portfolio_overview(navs), "missing": missing}
 
-    def _show_overview(self, ov) -> None:
+    def _show_overview(self, payload) -> None:
+        ov = payload["overview"]
+        missing = payload["missing"]
+        if missing:
+            self.overview_info.set(
+                f"行情缺失：{', '.join(missing)}。无法计算完整仓位和可用现金。\n"
+                f"已成功估值部分：{ov['invested_value']:,.2f} 元"
+            )
+            return
         self.overview_info.set(
             f"总资金：{ov['total_capital']:,.2f} 元\n"
             f"已投入(持仓市值)：{ov['invested_value']:,.2f} 元  "
@@ -1101,11 +1193,17 @@ class FundDetailWindow(tk.Toplevel):
         self.trade_tree.tag_configure(trade_log.SELL, foreground="#16a085")
 
     def reload(self) -> None:
-        self.app._run_async(self._load, self._populate, self.code)
+        self.app._run_async(
+            self._load, self._populate, self.code, self.app.intraday_var.get()
+        )
 
     @staticmethod
-    def _load(code):
+    def _load(code, with_estimate):
         nav_df = data_fetcher.fetch_fund_nav(code)
+        if with_estimate:
+            estimate = data_fetcher.fetch_fund_estimate(code)
+            if estimate:
+                nav_df = _append_estimate_point(nav_df, estimate)
         ind = compute_indicators(nav_df)
         name = data_fetcher.fetch_fund_name(code)
         report = evaluate_signals(ind, code, name)
@@ -1188,7 +1286,11 @@ class FundDetailWindow(tk.Toplevel):
             if amount <= 0 or nav <= 0:
                 messagebox.showerror("输入有误", "金额与净值必须大于 0。", parent=dlg)
                 return
-            trade_log.add_trade(self.code, action, amount, nav, note_var.get())
+            try:
+                trade_log.add_trade(self.code, action, amount, nav, note_var.get())
+            except ValueError as exc:
+                messagebox.showerror("输入有误", str(exc), parent=dlg)
+                return
             dlg.destroy()
             self._refresh_trade_tree()
             self.reload()
@@ -1252,11 +1354,15 @@ class IndexDetailWindow(tk.Toplevel):
             return
         d = data["detail"]
         self.title_var.set(
-            f"{d['name']}  {d['price']:,.2f}  ({d['change_pct']:+.2f}%)")
+            f"{d['name']}  {_format_number(d['price'])}  "
+            f"({_format_number(d['change_pct'], signed=True)}%)"
+        )
         text = (
-            f"最新: {d['price']:,.2f}    涨跌: {d['change']:+.2f}  ({d['change_pct']:+.2f}%)\n"
-            f"今开: {d['open']:,.2f}    昨收: {d['prev_close']:,.2f}\n"
-            f"最高: {d['high']:,.2f}    最低: {d['low']:,.2f}\n"
+            f"最新: {_format_number(d['price'])}    "
+            f"涨跌: {_format_number(d['change'], signed=True)}  "
+            f"({_format_number(d['change_pct'], signed=True)}%)\n"
+            f"今开: {_format_number(d['open'])}    昨收: {_format_number(d['prev_close'])}\n"
+            f"最高: {_format_number(d['high'])}    最低: {_format_number(d['low'])}\n"
             f"成交额: {(d['amount'] or 0) / 1e8:,.2f} 亿元\n"
         )
         self.info.config(state="normal")
@@ -1273,8 +1379,8 @@ class IndexDetailWindow(tk.Toplevel):
                 tag = "" if pct is None or pd_isna(pct) else ("up" if pct >= 0 else "down")
                 pct_str = "-" if pct is None or pd_isna(pct) else f"{pct:+.2f}"
                 self.hist_tree.insert("", tk.END, values=(
-                    str(r["date"])[:10], f"{r['close']:,.2f}", pct_str,
-                    f"{r['high']:,.2f}", f"{r['low']:,.2f}"), tags=(tag,))
+                    str(r["date"])[:10], _format_number(r["close"]), pct_str,
+                    _format_number(r["high"]), _format_number(r["low"])), tags=(tag,))
 
 
 def pd_isna(v) -> bool:
@@ -1283,6 +1389,15 @@ def pd_isna(v) -> bool:
         return v is None or (isinstance(v, float) and math.isnan(v))
     except Exception:
         return False
+
+
+def _format_number(value, signed: bool = False) -> str:
+    if value is None or pd_isna(value):
+        return "-"
+    try:
+        return f"{float(value):+,.2f}" if signed else f"{float(value):,.2f}"
+    except (TypeError, ValueError):
+        return "-"
 
 
 def main() -> None:
