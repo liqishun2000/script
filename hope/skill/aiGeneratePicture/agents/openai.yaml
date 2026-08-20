@@ -1,0 +1,4 @@
+interface:
+  display_name: "Android UI Asset Redraw"
+  short_description: "Redraw Android UI images and export exact-size WebP previews"
+  default_prompt: "Use $ai-generate-picture to replace an Android UI image with a size-matched SVG and WebP preview."
