@@ -52,6 +52,10 @@ QStatusBar { background: white; border-top: 1px solid #e0e4e9; }
 QProgressBar { border: none; background: #e5e9ed; max-height: 5px; }
 QProgressBar::chunk { background: #319679; }
 QCheckBox { spacing: 7px; padding: 4px 0; }
+QTabWidget::pane { border: none; }
+QTabBar::tab { background: transparent; padding: 10px 14px; border-bottom: 2px solid transparent; }
+QTabBar::tab:selected { color: #15598c; border-bottom-color: #246fa8; }
+QTabBar::tab:hover { background: #e7f0fa; }
 QToolTip { background: #292d33; color: white; border: none; padding: 6px; }
 """
 
@@ -358,6 +362,7 @@ class MainWindow(QMainWindow):
         self.context.preferences.set("window/geometry", self.saveGeometry())
         self.context.preferences.set("window/state", self.saveState())
         tasks.save()
+        self.context.sessions.close()
         self.context.devices.refresh_timer.stop()
         event.accept()
 

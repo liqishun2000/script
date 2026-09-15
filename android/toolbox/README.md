@@ -56,6 +56,25 @@ a per-user key on the first build. Configure a separate key and password when a 
 New modules do not edit other pages or implement their own device polling, worker threads or log panes.
 The registration test adds a sample module to the existing window without changing it.
 
+## Device Observations
+
+Device details and current Activity/Window follow the selected device. Visible pages refresh every
+30 seconds and 2 seconds respectively; automatic refresh can be paused. Raw command output and
+copyable snapshots are available. Foreground transitions retain the latest 100 observations in memory.
+Activity owner and focused window are separate: keyboards and dialogs may hold window focus.
+Missing vendor fields remain unavailable rather than becoming zero. Successive dumps are not atomic.
+
+`AppContext.selection_changed` announces actual selection changes. Live modules use
+`context.sessions.subscribe(owner, serial, kind)` and `unsubscribe(owner)` instead of the finite task
+queue. Consumers share one collector per device and observation kind. Results are delivered on the
+Qt thread; generations discard results after unsubscribe or disconnect. Pages release subscriptions
+when hidden; reconnecting the same device resumes active subscriptions. Each command has an 8-second
+timeout and cancellation is checked between commands. Shutdown prevents further commands; an in-flight
+read may finish within that timeout. No packages are installed and no device settings are changed.
+
+The current batch provides observation infrastructure only. Screen control, performance history,
+and Perfetto analysis remain subsequent batches.
+
 ## Runtime Layout for Later Packaging
 
 Resource lookup priority is explicit setting, bundled runtime, then host discovery. Frozen-resource paths

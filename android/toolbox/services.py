@@ -391,13 +391,28 @@ class Tasks(QObject):
         self.changed.emit()
 
 
-class AppContext:
+class AppContext(QObject):
+    selection_changed = Signal(str)
+
     def __init__(self, root=None):
+        super().__init__()
         self.preferences = Preferences(root)
         self.tools = Tools(self.preferences)
         self.devices = Devices(self.tools)
         self.tasks = Tasks(self.preferences)
-        self.selected_serial = ""
+        self._selected_serial = ""
+        from .device_observer import DeviceSessionManager
+        self.sessions = DeviceSessionManager(self)
+
+    @property
+    def selected_serial(self):
+        return self._selected_serial
+
+    @selected_serial.setter
+    def selected_serial(self, serial):
+        if serial != self._selected_serial:
+            self._selected_serial = serial
+            self.selection_changed.emit(serial)
 
     def target(self):
         if not any(d.serial == self.selected_serial and d.state == "device" for d in self.devices.items):

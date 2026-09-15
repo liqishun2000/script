@@ -3,6 +3,7 @@
 import argparse
 import os
 import tempfile
+import time
 from pathlib import Path
 from unittest.mock import patch
 
@@ -11,6 +12,7 @@ from PySide6.QtWidgets import QApplication, QPushButton
 
 from android.toolbox.app import MainWindow
 from android.toolbox.services import AppContext, Device, Devices, Outcome, Task
+from android.toolbox.device_observer import Observation, parse_details, parse_foreground
 
 
 def main():
@@ -54,6 +56,16 @@ def main():
                 window.show_page(key)
                 app.processEvents()
                 scroll, widget = window.pages[key]
+                if key in {"device_info", "foreground"}:
+                    context.selected_serial = "R5CN90J7ASY"
+                    window.update_devices(context.devices.items, "")
+                    widget.auto.setChecked(False)
+                    raw = {"属性": "[ro.product.manufacturer]: [samsung]\n[ro.product.model]: [Galaxy S23]",
+                           "Activity": "mResumedActivity: ActivityRecord{x u0 com.example.cleaner/com.google.android.gms.ads.AdActivity}",
+                           "Window": "mCurrentFocus=Window{x u0 com.example.cleaner/com.google.android.gms.ads.AdActivity}"}
+                    rows = parse_details(raw) if key == "device_info" else parse_foreground(raw)
+                    widget.receive(Observation(context.selected_serial, widget.kind, time.time(), tuple(rows), str(raw)))
+                    app.processEvents()
                 assert widget.width() <= scroll.viewport().width(), (key, "horizontal overflow")
                 # The scroll area must make the last action reachable even on short displays.
                 buttons = widget.findChildren(QPushButton)
