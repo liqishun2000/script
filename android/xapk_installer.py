@@ -11,6 +11,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import zipfile
 from pathlib import Path
@@ -18,7 +19,23 @@ from typing import Callable, Iterable
 
 LogFunc = Callable[[str], None]
 
-ADB_PATH = "adb"
+
+def _find_adb() -> str:
+    """Prefer the adb bundled by PyInstaller, then fall back to the host PATH."""
+    executable = "adb.exe" if os.name == "nt" else "adb"
+    bundle_root = getattr(sys, "_MEIPASS", None)
+    if bundle_root:
+        bundled = Path(bundle_root) / "platform-tools" / executable
+        if bundled.is_file():
+            return str(bundled)
+
+    project_copy = Path(__file__).resolve().parent / "platform-tools" / executable
+    if project_copy.is_file():
+        return str(project_copy)
+    return shutil.which(executable) or executable
+
+
+ADB_PATH = _find_adb()
 
 if os.name == "nt":
     _SUBPROCESS_FLAGS = subprocess.CREATE_NO_WINDOW  # 隐藏 adb 黑窗口
@@ -140,10 +157,24 @@ def install_xapk(
     downgrade: bool = False,
     log: LogFunc = print,
 ) -> None:
-    """解压并安装一个 XAPK / APKS / APKM 包。"""
+    """安装一个 APK，或解压并安装一个 XAPK / APKS / APKM 包。"""
     xapk_path = Path(xapk_path).expanduser().resolve()
     if not xapk_path.exists():
         raise InstallError(f"文件不存在: {xapk_path}")
+
+    if xapk_path.suffix.lower() == ".apk":
+        target = _resolve_serial(serial)
+        log(f"目标设备: {target}")
+        flags = []
+        if keep_data:
+            flags.append("-r")
+        if downgrade:
+            flags.append("-d")
+        log(f"APK 文件: {xapk_path} ({xapk_path.stat().st_size / 1024 / 1024:.1f} MB)")
+        _stream_run([ADB_PATH, "-s", target, "install", *flags, str(xapk_path)], log)
+        log("安装完成。")
+        return
+
     if not zipfile.is_zipfile(xapk_path):
         raise InstallError(f"不是有效的 XAPK / ZIP 文件: {xapk_path}")
 
