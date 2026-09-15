@@ -10,6 +10,28 @@ import re
 import shutil
 import subprocess
 import sys
+import time
+
+
+def emulator_serials(output: str) -> list[str]:
+    return list(dict.fromkeys(
+        fields[0] for line in output.splitlines()
+        if len(fields := line.split()) >= 2 and re.fullmatch(r"emulator-\d+", fields[0])
+    ))
+
+
+def close_emulator(serial: str, adb_path: str, runner, timeout: float = 15) -> None:
+    """Close one SDK emulator and confirm it disappeared from adb's list."""
+    if not re.fullmatch(r"emulator-\d+", serial):
+        raise ValueError(f"Not an Android SDK emulator: {serial}")
+    runner([adb_path, "-s", serial, "emu", "kill"], timeout=15)
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        _, output = runner([adb_path, "devices"], stream_output=False, timeout=10)
+        if serial not in emulator_serials(output):
+            return
+        time.sleep(0.5)
+    raise TimeoutError(f"Shutdown requested, but {serial} is still listed by adb")
 
 
 def run_adb(adb: str, *args: str) -> str:
@@ -38,12 +60,7 @@ def main() -> int:
         print(f"Failed to list devices: {exc}", file=sys.stderr)
         return 1
 
-    emulators = []
-    for line in output.splitlines():
-        fields = line.split()
-        if len(fields) >= 2 and re.fullmatch(r"emulator-\d+", fields[0]):
-            if fields[0] not in emulators:
-                emulators.append(fields[0])
+    emulators = emulator_serials(output)
 
     if not emulators:
         print("No Android SDK emulators found.")

@@ -47,6 +47,11 @@ class Toolchain:
     adb: Path
     apktool_jar: Path
     build_tools: Path
+    serial: str | None = None
+    runner: Callable | None = field(default=None, repr=False, compare=False)
+
+    def run(self, command, **kwargs):
+        return (self.runner or run_command)(command, **kwargs)
 
     @property
     def zipalign(self) -> Path:
@@ -396,7 +401,7 @@ def analyze_xapk(
     _assert_file(base_apk_path, "Base APK")
 
     log("Decoding Manifest while preserving raw DEX files...")
-    run_command(
+    toolchain.run(
         [
             toolchain.java,
             "-jar",
@@ -425,7 +430,7 @@ def analyze_xapk(
     if application_name == PAIRIP_APPLICATION:
         log("PairIP Application wrapper found. Decoding smali for inheritance evidence...")
         smali_dir = workspace / "smali-readonly"
-        run_command(
+        toolchain.run(
             [
                 toolchain.java,
                 "-jar",
@@ -597,7 +602,7 @@ def ensure_lab_keystore(
         return
     keystore_path.parent.mkdir(parents=True, exist_ok=True)
     log(f"Creating lab keystore: {keystore_path}")
-    run_command(
+    toolchain.run(
         [
             toolchain.keytool,
             "-genkeypair",
@@ -633,7 +638,7 @@ def _sign_apk(
     password: str,
     log: LogFn,
 ) -> str:
-    run_command(
+    toolchain.run(
         [
             toolchain.java,
             "-jar",
@@ -659,7 +664,7 @@ def _sign_apk(
         ],
         log=log,
     )
-    _, output = run_command(
+    _, output = toolchain.run(
         [
             toolchain.java,
             "-jar",
@@ -705,7 +710,7 @@ def build_patched_xapk(
     unsigned_base = dist_dir / "base-unsigned.apk"
     aligned_base = signed_apk_dir / result.base_apk_name
     log("Building patched base APK...")
-    run_command(
+    toolchain.run(
         [
             toolchain.java,
             "-jar",
@@ -717,7 +722,7 @@ def build_patched_xapk(
         ],
         log=log,
     )
-    run_command(
+    toolchain.run(
         [toolchain.zipalign, "-f", "-p", "4", unsigned_base, aligned_base],
         log=log,
     )
@@ -820,8 +825,9 @@ def _adb(
     check: bool = True,
     stream_output: bool = True,
 ) -> tuple[int, str]:
-    return run_command(
-        [toolchain.adb, *args],
+    target = ["-s", toolchain.serial] if toolchain.serial and args[0] != "devices" else []
+    return toolchain.run(
+        [toolchain.adb, *target, *args],
         log=log,
         check=check,
         stream_output=stream_output,
@@ -871,6 +877,8 @@ def read_device_info(toolchain: Toolchain, log: LogFn = _null_log) -> DeviceInfo
         match = re.match(r"^(\S+)\s+device$", line.strip())
         if match:
             serials.append(match.group(1))
+    if toolchain.serial:
+        serials = [serial for serial in serials if serial == toolchain.serial]
     if len(serials) != 1:
         raise GpCheckError(f"Expected exactly one authorized adb device, found {len(serials)}.")
 

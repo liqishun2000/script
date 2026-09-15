@@ -80,10 +80,11 @@ def _capture(cmd: list[str]) -> str:
     ).stdout
 
 
-def list_devices() -> list[str]:
+def list_devices(adb_path: str | None = None, runner: Callable | None = None) -> list[str]:
     """返回所有处于 device 状态的设备序列号；adb 不可用时返回空列表。"""
     try:
-        out = _capture([ADB_PATH, "devices"])
+        command = [adb_path or ADB_PATH, "devices"]
+        out = runner(command, stream_output=False)[1] if runner else _capture(command)
     except (FileNotFoundError, subprocess.CalledProcessError):
         return []
     devices: list[str] = []
@@ -94,8 +95,8 @@ def list_devices() -> list[str]:
     return devices
 
 
-def _resolve_serial(serial: str | None) -> str:
-    devices = list_devices()
+def _resolve_serial(serial: str | None, adb_path=None, runner=None) -> str:
+    devices = list_devices(adb_path, runner)
     if not devices:
         raise InstallError("没有检测到 adb 设备，请连接手机并开启 USB 调试。")
     if serial:
@@ -156,14 +157,22 @@ def install_xapk(
     keep_data: bool = False,
     downgrade: bool = False,
     log: LogFunc = print,
+    adb_path: str | None = None,
+    runner: Callable | None = None,
 ) -> None:
     """安装一个 APK，或解压并安装一个 XAPK / APKS / APKM 包。"""
     xapk_path = Path(xapk_path).expanduser().resolve()
+    adb = adb_path or ADB_PATH
+
+    def stream(command, log, check=True):
+        if runner:
+            return runner(command, log=log, check=check)[0]
+        return _stream_run(command, log, check)
     if not xapk_path.exists():
         raise InstallError(f"文件不存在: {xapk_path}")
 
     if xapk_path.suffix.lower() == ".apk":
-        target = _resolve_serial(serial)
+        target = _resolve_serial(serial, adb, runner)
         log(f"目标设备: {target}")
         flags = []
         if keep_data:
@@ -171,14 +180,14 @@ def install_xapk(
         if downgrade:
             flags.append("-d")
         log(f"APK 文件: {xapk_path} ({xapk_path.stat().st_size / 1024 / 1024:.1f} MB)")
-        _stream_run([ADB_PATH, "-s", target, "install", *flags, str(xapk_path)], log)
+        stream([adb, "-s", target, "install", *flags, str(xapk_path)], log)
         log("安装完成。")
         return
 
     if not zipfile.is_zipfile(xapk_path):
         raise InstallError(f"不是有效的 XAPK / ZIP 文件: {xapk_path}")
 
-    target = _resolve_serial(serial)
+    target = _resolve_serial(serial, adb, runner)
     log(f"目标设备: {target}")
     log(f"XAPK 文件: {xapk_path} ({xapk_path.stat().st_size / 1024 / 1024:.1f} MB)")
 
@@ -207,22 +216,22 @@ def install_xapk(
             flags.append("-d")
 
         if len(apks) == 1:
-            cmd = [ADB_PATH, "-s", target, "install", *flags, str(apks[0])]
+            cmd = [adb, "-s", target, "install", *flags, str(apks[0])]
         else:
             cmd = [
-                ADB_PATH, "-s", target, "install-multiple", *flags,
+                adb, "-s", target, "install-multiple", *flags,
                 *[str(p) for p in apks],
             ]
-        _stream_run(cmd, log)
+        stream(cmd, log)
 
         if obbs:
             for d in {os.path.dirname(t) for _, t in obbs}:
-                _stream_run(
-                    [ADB_PATH, "-s", target, "shell", "mkdir", "-p", d],
+                stream(
+                    [adb, "-s", target, "shell", "mkdir", "-p", d],
                     log, check=False,
                 )
             for src, tgt in obbs:
-                _stream_run([ADB_PATH, "-s", target, "push", str(src), tgt], log)
+                stream([adb, "-s", target, "push", str(src), tgt], log)
 
         log("安装完成。")
     finally:
