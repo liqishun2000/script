@@ -7,3 +7,4 @@ state.json.bak
 state.json.lock
 gold_monitor.log
 gold_monitor.log.*
+/state.json
