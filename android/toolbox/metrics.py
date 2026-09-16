@@ -1,5 +1,5 @@
 from __future__ import annotations
-import os, queue, re, subprocess, threading, time
+import os, queue, re, subprocess, threading, time, sqlite3, json
 from dataclasses import dataclass
 from PySide6.QtCore import QObject, QTimer, Signal
 
@@ -10,6 +10,34 @@ class MetricSample:
     timestamp: float
     values: tuple[tuple[str, str], ...]
     raw: str = ""
+
+class MetricStore:
+    def __init__(self, root):
+        self.path = root / "metrics.sqlite3"; self.lock = threading.Lock()
+        db=sqlite3.connect(self.path)
+        try: db.execute("create table if not exists samples (id integer primary key, serial text, kind text, package text, ts real, payload text)"); db.commit()
+        finally: db.close()
+    def add(self, sample, package=""):
+        with self.lock:
+            db=sqlite3.connect(self.path)
+            try: db.execute("insert into samples(serial,kind,package,ts,payload) values(?,?,?,?,?)", (sample.serial,sample.kind,package,sample.timestamp,json.dumps(dict(sample.values),ensure_ascii=False))); db.commit()
+            finally: db.close()
+    def recent(self, serial="", kind="", limit=500):
+        query="select serial,kind,package,ts,payload from samples where 1=1"; args=[]
+        if serial: query += " and serial=?"; args.append(serial)
+        if kind: query += " and kind=?"; args.append(kind)
+        query += " order by ts desc limit ?"; args.append(limit)
+        with self.lock:
+            db=sqlite3.connect(self.path)
+            try: return db.execute(query,args).fetchall()
+            finally: db.close()
+    def export_csv(self, path, serial="", kind=""):
+        import csv
+        rows=self.recent(serial,kind,10000); keys=sorted({k for *_, values in rows for k in json.loads(values)})
+        with path.open("w",newline="",encoding="utf-8-sig") as f:
+            writer=csv.writer(f); writer.writerow(["serial","kind","package","time",*keys])
+            for s,k,p,ts,values in rows:
+                values=json.loads(values); writer.writerow([s,k,p,time.strftime("%Y-%m-%d %H:%M:%S",time.localtime(ts)),*[values.get(key,"") for key in keys]])
 
 def _num(pattern, text, default="N/A"):
     m = re.search(pattern, text, re.M)
@@ -55,16 +83,16 @@ class MetricsManager(QObject):
     updated = Signal(object)
     failed = Signal(str, str, str)
     def __init__(self, context):
-        super().__init__(context); self.context=context; self.jobs={}; self.events=queue.Queue(); self.timer=QTimer(self); self.timer.timeout.connect(self.poll); self.timer.start(100)
+        super().__init__(context); self.context=context; self.store=MetricStore(context.preferences.root); self.jobs={}; self.events=queue.Queue(); self.timer=QTimer(self); self.timer.timeout.connect(self.poll); self.timer.start(100)
     def subscribe(self, owner, serial, kind, package=""):
-        self.unsubscribe(owner); self.jobs[(serial,kind,package)] = {"owner":owner,"last":None,"busy":False,"next":0,"stop":False}
+        self.unsubscribe(owner); self.jobs[(serial,kind,package)] = {"owner":owner,"package":package,"last":None,"busy":False,"next":0,"stop":False}
     def unsubscribe(self, owner):
         for key in list(self.jobs):
             if self.jobs[key]["owner"] is owner: self.jobs.pop(key)
     def poll(self):
         while not self.events.empty():
             job, result = self.events.get_nowait(); job["busy"]=False
-            if not job["stop"]: self.updated.emit(result)
+            if not job["stop"] and isinstance(result, MetricSample): self.store.add(result, job.get("package", "")); self.updated.emit(result)
         online={d.serial for d in self.context.devices.items if d.state=="device"}
         for key,job in list(self.jobs.items()):
             if job["busy"] or time.monotonic()<job["next"]: continue

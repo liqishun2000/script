@@ -48,6 +48,8 @@ def builtins():
                  prefix + "metrics_page:MetricsPage", ("adb",)),
         ToolSpec("app_metrics", "App 监测", "性能分析", QStyle.StandardPixmap.SP_FileIcon,
                  prefix + "metrics_page:AppMetricsPage", ("adb",)),
+        ToolSpec("metric_history", "监测记录", "性能分析", QStyle.StandardPixmap.SP_FileDialogListView,
+                 prefix + "history_page:HistoryPage"),
         ToolSpec("tasks", "任务记录", "工作区", QStyle.StandardPixmap.SP_FileDialogListView,
                  prefix + "task_page:TaskPage"),
         ToolSpec("settings", "设置", "工作区", QStyle.StandardPixmap.SP_FileDialogInfoView,
