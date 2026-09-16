@@ -72,8 +72,49 @@ when hidden; reconnecting the same device resumes active subscriptions. Each com
 timeout and cancellation is checked between commands. Shutdown prevents further commands; an in-flight
 read may finish within that timeout. No packages are installed and no device settings are changed.
 
-The current batch provides observation infrastructure only. Screen control, performance history,
-and Perfetto analysis remain subsequent batches.
+Performance history and Perfetto analysis remain subsequent batches.
+
+## Screen Control
+
+The Screen Control page opens one independent window per selected device. Windows remain bound
+to their original serial. Mouse gestures and keyboard/clipboard input use the official scrcpy engine;
+the toolbar provides Back, Home, Recents, Power, volume, screenshots, fullscreen, quality and reconnect.
+PNG screenshots are written under the configured output directory's `screenshots` folder.
+Changing quality reconnects that window. Disconnecting pauses it; reconnecting the same serial resumes.
+
+Windows 10/11 x64 is currently supported. Prepare the pinned runtime once:
+
+```powershell
+python -m android.toolbox.download_runtime
+```
+
+The helper downloads the official [scrcpy 4.1 Windows archive](https://github.com/Genymobile/scrcpy/releases/tag/v4.1)
+and verifies SHA-256 `5b12172b3264b2889f4583ee64752ce832e29bc8b1089dca81093459697165db`.
+The complete extracted directory, including DLLs, server and license, is kept in `runtime/scrcpy/`
+(ignored by Git). Alternatively configure an existing `scrcpy.exe` in Settings, keeping its companion
+files beside it. GUI startup does not download dependencies. Packaging must include this entire directory
+and all required third-party license notices; the current helper targets development, not an EXE build.
+
+Native HWND lookup is restricted to the owned scrcpy PID. Qt embeds the window only after the first
+texture is ready. Software rendering is used because the tested GPU backends could clip after native
+reparenting/resizing. This favors reliable embedded resizing and may cost more CPU. Native child clicks
+restore keyboard focus across the Qt/SDL threads. A window's exit closes its own process; it never kills
+the ADB server or another scrcpy session.
+Device input uses bounded QProcess commands outside the install queue and captures the original serial.
+Normal Ctrl+V uses scrcpy clipboard synchronization; device IME/app restrictions still apply.
+
+Optional live smoke test (changes the device's foreground UI, opens Recents/Home and notification shade):
+
+```powershell
+python -m android.toolbox.tests.screen_smoke --serial YOUR_SERIAL
+```
+
+Add `--settings-input` to open Settings search and verify Chinese clipboard paste via native mouse and
+keyboard events. This optional check requires Settings with a Search accessibility label in Chinese or
+English. Screenshots are local under `%TEMP%/toolbox-screen-visual`; they may contain device screen data.
+The test restores the host clipboard and removes its device-side UI hierarchy dump.
+Repeat with `QT_SCALE_FACTOR=2` for scaled layouts. Native desktop captures and pixel variation checks
+are used because Qt widget-only captures omit the external GPU surface.
 
 ## Runtime Layout for Later Packaging
 
@@ -82,6 +123,7 @@ use `sys._MEIPASS`; mutable data uses the user data directory, never the extract
 
 ```text
 runtime/
+  scrcpy/scrcpy.exe             # Include server, DLLs and license from the verified archive.
   platform-tools/adb.exe        # Include matching platform-tools DLLs.
   jdk/bin/java.exe              # Include the complete compatible JDK runtime.
   jdk/bin/keytool.exe

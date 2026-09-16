@@ -363,6 +363,7 @@ class MainWindow(QMainWindow):
         self.context.preferences.set("window/state", self.saveState())
         tasks.save()
         self.context.sessions.close()
+        self.context.screens.close()
         self.context.devices.refresh_timer.stop()
         event.accept()
 

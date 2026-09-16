@@ -42,6 +42,8 @@ def builtins():
                  prefix + "observer_page:DeviceInfoPage", ("adb",)),
         ToolSpec("foreground", "当前界面", "设备工具", QStyle.StandardPixmap.SP_DesktopIcon,
                  prefix + "observer_page:ForegroundPage", ("adb",)),
+        ToolSpec("screen", "屏幕控制", "设备工具", QStyle.StandardPixmap.SP_ComputerIcon,
+                 prefix + "screen_page:ScreenPage", ("adb", "scrcpy")),
         ToolSpec("tasks", "任务记录", "工作区", QStyle.StandardPixmap.SP_FileDialogListView,
                  prefix + "task_page:TaskPage"),
         ToolSpec("settings", "设置", "工作区", QStyle.StandardPixmap.SP_FileDialogInfoView,

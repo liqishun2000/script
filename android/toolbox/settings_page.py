@@ -13,7 +13,7 @@ class SettingsPage(Page):
         fields, layout = form()
         self.tool_fields = {}
         labels = {"adb": "ADB", "java": "Java", "keytool": "Keytool", "apktool": "Apktool JAR",
-                  "build_tools": "Android Build Tools"}
+                  "build_tools": "Android Build Tools", "scrcpy": "scrcpy"}
         detected = context.tools.snapshot()
         for key in Tools.KEYS:
             widget = FileField(str(preferences.get("tools/" + key)), directory=key == "build_tools")

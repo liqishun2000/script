@@ -69,7 +69,7 @@ class Preferences:
 
 class Tools(QObject):
     changed = Signal()
-    KEYS = ("adb", "java", "keytool", "apktool", "build_tools")
+    KEYS = ("adb", "java", "keytool", "apktool", "build_tools", "scrcpy")
 
     def __init__(self, preferences: Preferences):
         super().__init__()
@@ -85,14 +85,16 @@ class Tools(QObject):
             "keytool": runtime / "jdk" / "bin" / "keytool.exe",
             "apktool": runtime / "apktool" / "apktool.jar",
             "build_tools": runtime / "build-tools",
+            "scrcpy": runtime / "scrcpy" / "scrcpy.exe",
         }
         fallback = {"adb": discovered.adb, "java": discovered.java, "keytool": discovered.keytool,
-                    "apktool": discovered.apktool_jar, "build_tools": discovered.build_tools}
+                    "apktool": discovered.apktool_jar, "build_tools": discovered.build_tools,
+                    "scrcpy": shutil.which("scrcpy") or ""}
         values = {}
         for key in self.KEYS:
             explicit = str(self.preferences.get("tools/" + key)).strip()
             candidate = explicit or (str(bundled[key]) if bundled[key].exists() else str(fallback[key]))
-            resolved = shutil.which(candidate) if key in {"adb", "java", "keytool"} else None
+            resolved = shutil.which(candidate) if key in {"adb", "java", "keytool", "scrcpy"} else None
             values[key] = str(Path(resolved or candidate).resolve()) if candidate not in {"", "."} else ""
         return values
 
@@ -403,6 +405,8 @@ class AppContext(QObject):
         self._selected_serial = ""
         from .device_observer import DeviceSessionManager
         self.sessions = DeviceSessionManager(self)
+        from .screen_control import ScreenManager
+        self.screens = ScreenManager(self)
 
     @property
     def selected_serial(self):
