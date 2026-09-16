@@ -407,6 +407,10 @@ class AppContext(QObject):
         self.sessions = DeviceSessionManager(self)
         from .screen_control import ScreenManager
         self.screens = ScreenManager(self)
+        from .metrics import MetricsManager
+        from .metrics_page import MetricWindows
+        self.metrics = MetricsManager(self)
+        self.metric_windows = MetricWindows(self)
 
     @property
     def selected_serial(self):

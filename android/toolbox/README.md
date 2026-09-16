@@ -74,6 +74,13 @@ read may finish within that timeout. No packages are installed and no device set
 
 Performance history and Perfetto analysis remain subsequent batches.
 
+## Performance Monitoring
+
+设备监测和 App 监测使用独立采样器，每个设备与目标只保留一个采样任务，不进入安装任务队列。
+设备指标包括 CPU 总使用率、内存、电量和温度服务状态；App 指标包括 PID、CPU、TOTAL PSS、Native
+PSS 和 Graphics PSS。采样结果只在 Qt 线程更新，设备切换或断线不会把旧结果写入新目标。
+当前版本先提供实时窗口，历史持久化、曲线、帧耗时、网络和 Perfetto 追踪放在下一批。
+
 ## Screen Control
 
 The Screen Control page opens one independent window per selected device. Windows remain bound

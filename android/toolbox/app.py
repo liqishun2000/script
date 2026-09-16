@@ -364,6 +364,8 @@ class MainWindow(QMainWindow):
         tasks.save()
         self.context.sessions.close()
         self.context.screens.close()
+        self.context.metrics.close()
+        self.context.metric_windows.close()
         self.context.devices.refresh_timer.stop()
         event.accept()
 
