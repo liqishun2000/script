@@ -67,23 +67,38 @@ class ForceDeleteService:
     def _path_exists(path: Path) -> bool:
         return os.path.lexists(path)
 
+    @staticmethod
+    def _directory_info(path: Path) -> tuple[bool, bool]:
+        info = path.lstat()
+        attributes = getattr(info, "st_file_attributes", 0)
+        directory = stat.S_ISDIR(info.st_mode) or bool(attributes & stat.FILE_ATTRIBUTE_DIRECTORY)
+        link = stat.S_ISLNK(info.st_mode) or bool(attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT)
+        return directory, link
+
+    def _remove_entry(self, path: Path) -> None:
+        directory, _ = self._directory_info(path)
+        if directory:
+            path.rmdir()
+        else:
+            path.unlink()
+
     def _unlink(self, path: Path) -> OSError | None:
         try:
-            path.unlink()
+            self._remove_entry(path)
             return None
         except FileNotFoundError:
             return None
         except PermissionError as first_error:
             try:
-                attributes = path.stat().st_file_attributes
+                attributes = path.lstat().st_file_attributes
             except (AttributeError, OSError):
                 return first_error
-            if not attributes & stat.FILE_ATTRIBUTE_READONLY:
+            if not attributes & stat.FILE_ATTRIBUTE_READONLY or attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT:
                 return first_error
             try:
                 path.chmod(stat.S_IWRITE)
                 self._log("INFO", "已清除只读属性，正在重试")
-                path.unlink()
+                self._remove_entry(path)
                 return None
             except FileNotFoundError:
                 return None
@@ -103,6 +118,8 @@ class ForceDeleteService:
                 return last_error
             if delay:
                 time.sleep(delay)
+            if self._is_cancelled(cancelled):
+                return last_error
             last_error = self._unlink(path)
             if last_error is None:
                 return None
@@ -116,25 +133,57 @@ class ForceDeleteService:
         schedule_on_reboot: bool = False,
         cancelled: CancelCallback | None = None,
     ) -> DeleteResult:
-        path = Path(raw_path).expanduser().absolute()
+        path = Path(os.path.abspath(Path(raw_path).expanduser()))
         self._log("INFO", f"开始处理: {path}")
 
         if self._is_cancelled(cancelled):
             return DeleteResult(path, DeleteStatus.CANCELLED, "操作已取消")
 
         if not self._path_exists(path):
-            message = "文件不存在，跳过"
+            message = "路径不存在，跳过"
             self._log("WARNING", message)
             return DeleteResult(path, DeleteStatus.NOT_FOUND, message)
 
-        if path.is_dir() and not path.is_symlink():
-            message = "当前版本只删除文件，不处理文件夹"
+        if path.parent == path:
+            message = "不允许删除磁盘或共享根目录"
             self._log("ERROR", message)
             return DeleteResult(path, DeleteStatus.FAILED, message)
 
+        try:
+            directory, link = self._directory_info(path)
+            if directory and not link:
+                # Enumerate only this directory; links/reparse points are handled as leaf entries.
+                children = list(path.iterdir())
+                failed = scheduled = 0
+                for child in children:
+                    if self._is_cancelled(cancelled):
+                        return DeleteResult(path, DeleteStatus.CANCELLED, "操作已取消，已删除的内容不会恢复")
+                    result = self.delete(child, confirm_close=confirm_close,
+                                         schedule_on_reboot=schedule_on_reboot, cancelled=cancelled)
+                    if result.status == DeleteStatus.CANCELLED:
+                        return DeleteResult(path, DeleteStatus.CANCELLED, "操作已取消，已删除的内容不会恢复")
+                    failed += result.status == DeleteStatus.FAILED
+                    scheduled += result.status == DeleteStatus.SCHEDULED
+                if failed:
+                    message = f"文件夹未完全删除：{failed} 个子项失败；已处理的内容不会恢复"
+                    self._log("ERROR", message)
+                    return DeleteResult(path, DeleteStatus.FAILED, message)
+                if self._is_cancelled(cancelled):
+                    return DeleteResult(path, DeleteStatus.CANCELLED, "操作已取消，已删除的内容不会恢复")
+                if scheduled:
+                    # Windows processes deferred deletions in registration order: children first.
+                    schedule_delete_after_reboot(path)
+                    message = "文件夹剩余内容已登记为重启后删除（子项先于父目录）"
+                    self._log("SUCCESS", message)
+                    return DeleteResult(path, DeleteStatus.SCHEDULED, message)
+        except OSError as error:
+            message = f"处理路径失败: {error}"
+            self._log("ERROR", message)
+            return DeleteResult(path, DeleteStatus.FAILED, message, error=error)
+
         delete_error = self._unlink(path)
         if delete_error is None:
-            message = "文件已永久删除"
+            message = "文件夹已永久删除" if directory else "文件已永久删除"
             self._log("SUCCESS", message)
             return DeleteResult(path, DeleteStatus.DELETED, message)
 
@@ -142,7 +191,8 @@ class ForceDeleteService:
         locking_processes: tuple[LockingProcess, ...] = ()
 
         try:
-            locking_processes = find_locking_processes(path)
+            # Restart Manager resolves resource paths; do not query a link's external target.
+            locking_processes = () if link else find_locking_processes(path)
         except RestartManagerError as error:
             self._log("WARNING", f"无法查询占用进程: {error}")
 
@@ -170,8 +220,8 @@ class ForceDeleteService:
                     delete_error = error
                     self._log("ERROR", f"关闭占用程序失败: {error}")
 
-                if delete_error is None:
-                    message = "占用程序关闭后，文件已永久删除"
+                if delete_error is None and not self._is_cancelled(cancelled):
+                    message = "占用程序关闭后，目标已永久删除"
                     self._log("SUCCESS", message)
                     return DeleteResult(
                         path,
@@ -204,7 +254,7 @@ class ForceDeleteService:
                 delete_error = error
                 self._log("ERROR", f"登记重启后删除失败: {error}")
             else:
-                message = "文件将在下次 Windows 启动时删除"
+                message = "目标已登记为下次 Windows 启动时删除"
                 self._log("SUCCESS", message)
                 return DeleteResult(
                     path,

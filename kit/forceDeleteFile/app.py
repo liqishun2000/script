@@ -93,7 +93,7 @@ class ForceDeleteApp:
         self.rows: dict[str, str] = {}
 
         self.schedule_on_reboot = tk.BooleanVar(value=True)
-        self.summary_text = tk.StringVar(value="0 个文件")
+        self.summary_text = tk.StringVar(value="0 个项目")
         self.activity_text = tk.StringVar(value="就绪")
         self.admin_text = tk.StringVar(
             value="管理员模式" if is_current_process_elevated() else "普通权限"
@@ -166,6 +166,8 @@ class ForceDeleteApp:
         toolbar.pack(fill="x", pady=(0, 10))
         self.add_button = ttk.Button(toolbar, text="添加文件", command=self._choose_files)
         self.add_button.pack(side="left")
+        self.add_folder_button = ttk.Button(toolbar, text="添加文件夹", command=self._choose_folder)
+        self.add_folder_button.pack(side="left", padx=(8, 0))
         self.remove_button = ttk.Button(
             toolbar, text="移除所选", command=self._remove_selected
         )
@@ -178,7 +180,7 @@ class ForceDeleteApp:
 
         self.drop_area = tk.Label(
             outer,
-            text="拖放文件",
+            text="拖放文件或文件夹",
             height=3,
             bg=SURFACE,
             fg=MUTED,
@@ -200,7 +202,7 @@ class ForceDeleteApp:
             show="headings",
             selectmode="extended",
         )
-        self.tree.heading("name", text="文件")
+        self.tree.heading("name", text="文件 / 文件夹")
         self.tree.heading("status", text="状态")
         self.tree.heading("path", text="路径")
         self.tree.column("name", width=210, minwidth=120, stretch=False)
@@ -321,9 +323,6 @@ class ForceDeleteApp:
             if not os.path.lexists(path):
                 self._append_log("WARNING", f"文件不存在，未添加: {path}")
                 continue
-            if path.is_dir() and not path.is_symlink():
-                self._append_log("WARNING", f"暂不支持文件夹，未添加: {path}")
-                continue
 
             key = self._path_key(path)
             if key in self.rows:
@@ -335,13 +334,18 @@ class ForceDeleteApp:
             added += 1
 
         if added:
-            self._append_log("INFO", f"已添加 {added} 个文件")
+            self._append_log("INFO", f"已添加 {added} 个项目")
         self._update_summary()
 
     def _choose_files(self) -> None:
         paths = filedialog.askopenfilenames(parent=self.root, title="选择要删除的文件")
         if paths:
             self.add_paths(paths)
+
+    def _choose_folder(self) -> None:
+        path = filedialog.askdirectory(parent=self.root, title="选择要删除的文件夹", mustexist=True)
+        if path:
+            self.add_paths((path,))
 
     def _remove_selected(self) -> None:
         if self.running:
@@ -371,12 +375,12 @@ class ForceDeleteApp:
         return tuple(paths)
 
     def _update_summary(self) -> None:
-        self.summary_text.set(f"{len(self.tree.get_children())} 个文件")
+        self.summary_text.set(f"{len(self.tree.get_children())} 个项目")
 
     def _set_controls_running(self, running: bool) -> None:
         self.running = running
         normal_state = "disabled" if running else "normal"
-        for button in (self.add_button, self.remove_button, self.clear_button):
+        for button in (self.add_button, self.add_folder_button, self.remove_button, self.clear_button):
             button.configure(state=normal_state)
         self.reboot_check.configure(state=normal_state)
         self.delete_button.configure(state=normal_state)
@@ -389,12 +393,12 @@ class ForceDeleteApp:
     def _start_delete(self) -> None:
         paths = self._listed_paths()
         if not paths:
-            messagebox.showinfo("ForceDelete File", "请先添加文件。", parent=self.root)
+            messagebox.showinfo("ForceDelete File", "请先添加文件或文件夹。", parent=self.root)
             return
 
         confirmed = messagebox.askyesno(
             "确认永久删除",
-            f"即将永久删除 {len(paths)} 个文件。\n\n"
+            f"即将永久删除 {len(paths)} 个项目，包含文件夹内的所有内容。\n\n"
             "此操作不经过回收站，无法撤销。是否继续？",
             icon="warning",
             parent=self.root,

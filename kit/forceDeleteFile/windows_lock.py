@@ -265,7 +265,8 @@ def shutdown_processes_locking_file(
 
 
 def schedule_delete_after_reboot(path: os.PathLike[str] | str) -> None:
-    resolved = str(Path(path).resolve())
+    # Preserve links/junctions: resolving would schedule deletion of their target instead.
+    resolved = os.path.abspath(path)
     ctypes.set_last_error(0)
     if not _kernel32.MoveFileExW(
         resolved, None, MOVEFILE_DELAY_UNTIL_REBOOT
@@ -278,4 +279,3 @@ def is_current_process_elevated() -> bool:
         return bool(_shell32.IsUserAnAdmin())
     except OSError:
         return False
-

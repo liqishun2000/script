@@ -25,9 +25,9 @@ def _confirm(prompt: str) -> bool:
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="查询占用进程并永久删除 Windows 文件。"
+        description="查询占用进程并永久删除 Windows 文件或文件夹。"
     )
-    parser.add_argument("files", nargs="+", type=Path, help="要删除的文件")
+    parser.add_argument("files", nargs="+", type=Path, help="要删除的文件或文件夹（递归删除）")
     parser.add_argument(
         "--yes",
         action="store_true",
@@ -50,7 +50,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
 
     if not args.yes and not _confirm(
-        f"将永久删除 {len(args.files)} 个文件，是否继续"
+        f"将永久删除 {len(args.files)} 个项目及文件夹内所有内容，是否继续"
     ):
         print("操作已取消")
         return 2
@@ -91,4 +91,3 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
-
