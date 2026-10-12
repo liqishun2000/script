@@ -1,0 +1,4 @@
+interface:
+  display_name: "禅道自动修复与监控"
+  short_description: "持续监控当前包的禅道变化，自动续跑会话、验证修复并逐项提交回写"
+  default_prompt: "使用 $zentao-bug-watch 修复当前包的待处理禅道 Bug，并持续监控新变化；逐个验证、独立提交推送后标记已解决，信息不足返回测试补充，SDK 问题暂缓。"
