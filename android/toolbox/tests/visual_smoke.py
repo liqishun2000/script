@@ -29,6 +29,7 @@ def main():
         context.devices.items = [Device("R5CN90J7ASY", "device", "Galaxy S23"),
                                  Device("emulator-5554", "device", "Pixel 8"),
                                  Device("emulator-5556", "offline", "Pixel Tablet")]
+        context.selected_serial = "R5CN90J7ASY"
         window = MainWindow(context)
         window.resize(1180, 780)
         window.show()
@@ -39,7 +40,9 @@ def main():
             page.add_files([str(path)])
         first = str(page.paths[0])
         page.results[first] = {"status": "success", "detail": "安装完成"}
+        page.results[str(page.paths[1])] = {"status": "failed", "detail": "设备在传输过程中断开"}
         page.render()
+        page.files.selectRow(0)
         task = Task("安装 2 个包", "install", None, "R5CN90J7ASY")
         task.status = "partial"
         task.outcome = Outcome("partial", [

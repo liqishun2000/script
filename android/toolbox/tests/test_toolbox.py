@@ -10,6 +10,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
+from PySide6.QtCore import QItemSelectionModel, Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QLabel
 
@@ -218,26 +219,153 @@ class WindowTests(unittest.TestCase):
 
     def test_install_snapshot_and_partial_results(self):
         page = self.window.pages["install"][1]
-        package = Path(self.temp.name) / "测试.apk"
-        package.touch()
-        page.add_files([str(package)])
+        packages = [Path(self.temp.name) / name for name in ("first.apk", "测试.apk", "third.xapk")]
+        for package in packages:
+            package.touch()
+        package = packages[1]
+        page.add_files(packages)
+        page.files.selectRow(1)
         self.context.devices.items = [Device("one", "device"), Device("two", "device")]
         self.context.selected_serial = "one"
         gate = threading.Event()
         self.context.tasks.submit("wait", "test", lambda ctx: (gate.wait(2), Outcome())[1])
         captured = []
         def operation(ctx, files, serial, tools, keep, downgrade):
-            captured.append((serial, keep))
+            captured.append((files, serial, keep, downgrade))
             return Outcome("failed", [{"name": str(package), "status": "failed", "detail": "sample failure"}])
         with patch.object(Tools, "require"), patch.object(operations, "install_packages", operation):
+            page.refresh_tools()
             page.submit()
+            page.files.selectRow(0)
             self.context.selected_serial = "two"
             page.keep.setChecked(True)
+            page.downgrade.setChecked(True)
+            page.remove()
             gate.set()
             wait_until(lambda: not page.pending)
-        self.assertEqual(captured, [("one", False)])
+        self.assertEqual(captured, [((package,), "one", False, False)])
         self.assertTrue(page.retry.isEnabled())
         self.assertIn("sample failure", page.files.item(0, 2).toolTip())
+
+    def install_fixture(self):
+        page = self.window.pages["install"][1]
+        packages = [Path(self.temp.name) / name for name in ("first.apk", "second.xapk", "third.apk")]
+        for package in packages:
+            package.touch()
+        page.add_files(packages)
+        self.context.devices.items = [Device("phone", "device")]
+        self.context.selected_serial = "phone"
+        return page, packages
+
+    @staticmethod
+    def select_install_rows(page, rows):
+        page.files.clearSelection()
+        for row in rows:
+            page.files.selectionModel().select(page.files.model().index(row, 0),
+                QItemSelectionModel.SelectionFlag.Select | QItemSelectionModel.SelectionFlag.Rows)
+
+    def test_install_buttons_submit_selected_or_all_in_list_order(self):
+        page, packages = self.install_fixture()
+        for rows, action, expected in (
+            ((1,), page.start, (packages[1],)),
+            ((2, 0), page.start, (packages[0], packages[2])),
+            ((1,), page.install_all, tuple(packages)),
+            ((), page.install_all, tuple(packages)),
+        ):
+            with self.subTest(rows=rows, action=action.text()):
+                def operation(ctx, files, *args):
+                    return Outcome(items=[{"name": str(path), "status": "success", "detail": "完成"}
+                                          for path in files])
+                with patch.object(Tools, "require"), patch.object(operations, "install_packages", side_effect=operation) as install:
+                    page.refresh_tools()
+                    self.select_install_rows(page, rows)
+                    action.click()
+                    self.assertTrue(page.pending)
+                    self.assertTrue(all(not control.isEnabled() for control in (page.start, page.install_all, page.retry)))
+                    with self.assertRaises(ValueError):
+                        page.submit("all")
+                    wait_until(lambda: not page.pending)
+                self.assertEqual(install.call_args.args[1], expected)
+
+    def test_install_selected_never_falls_back_to_all(self):
+        page, _ = self.install_fixture()
+        with patch.object(Tools, "require"), patch.object(operations, "install_packages") as install:
+            page.refresh_tools()
+            self.assertFalse(page.start.isEnabled())
+            self.assertTrue(page.install_all.isEnabled())
+            page.start.click()
+            with self.assertRaisesRegex(ValueError, "请先选中"):
+                page.submit()
+            install.assert_not_called()
+            self.assertFalse(page.pending)
+            page.clear()
+            self.assertTrue(all(not control.isEnabled() for control in (page.start, page.install_all, page.retry)))
+
+    def test_retry_failed_files_ignores_selection_and_preserves_other_results(self):
+        page, packages = self.install_fixture()
+        page.results = {str(packages[0]): {"status": "failed", "detail": "重试"},
+                        str(packages[1]): {"status": "success", "detail": "上次完成"},
+                        str(packages[2]): {"status": "running", "detail": "其他记录"}}
+        original = {key: dict(value) for key, value in page.results.items()}
+        page.render()
+        self.select_install_rows(page, (1,))
+        with patch.object(Tools, "require"), patch.object(operations, "install_packages", return_value=Outcome()) as install:
+            page.refresh_tools()
+            page.retry.click()
+            wait_until(lambda: not page.pending)
+        self.assertEqual(install.call_args.args[1], (packages[0],))
+        self.assertEqual(page.results[str(packages[1])], original[str(packages[1])])
+        self.assertEqual(page.results[str(packages[2])], original[str(packages[2])])
+        self.assertEqual(page.results[str(packages[0])]["status"], "success")
+
+    def test_install_selection_survives_refresh_and_file_list_changes(self):
+        page, packages = self.install_fixture()
+        self.select_install_rows(page, (0, 2))
+        page.results[str(packages[0])] = {"status": "success", "detail": "完成"}
+        page.render()
+        self.assertEqual(page.selected_paths(), (packages[0], packages[2]))
+        other = Path(self.temp.name) / "other" / packages[0].name
+        other.parent.mkdir()
+        other.touch()
+        page.add_files([other])
+        self.assertEqual(page.selected_paths(), (packages[0], packages[2]))
+        self.assertIn("已选 2 个", page.count.text())
+        self.assertIn("（2）", page.start.text())
+        self.assertIn("（4）", page.install_all.text())
+        page.remove()
+        self.assertEqual(page.paths, [packages[1], other])
+        self.assertEqual(page.selected_paths(), ())
+        self.assertIn("已选 0 个", page.count.text())
+
+    def test_install_progress_keeps_multiple_selected_files(self):
+        page, packages = self.install_fixture()
+        self.select_install_rows(page, (0, 2))
+        task = Task("安装 2 个包", "install", None, "phone")
+        task.status = "running"
+        page.pending.add(task.id)
+        page.pending_paths[task.id] = (packages[0], packages[2])
+        page.results = {str(path): {"status": "queued", "detail": ""} for path in (packages[0], packages[2])}
+        self.context.tasks.tasks.append(task)
+        page.update_progress()
+        self.assertEqual(page.selected_paths(), (packages[0], packages[2]))
+        self.assertNotIn(str(packages[1]), page.results)
+        task.status = "cancelled"
+        page.completed(task)
+        self.assertEqual(page.selected_paths(), (packages[0], packages[2]))
+
+    def test_install_supports_ctrl_and_shift_selection(self):
+        page, packages = self.install_fixture()
+        APP.processEvents()
+        def click(row, modifiers=Qt.KeyboardModifier.NoModifier):
+            QTest.mouseClick(page.files.viewport(), Qt.MouseButton.LeftButton, modifiers,
+                             page.files.visualItemRect(page.files.item(row, 0)).center())
+        click(0)
+        click(2, Qt.KeyboardModifier.ControlModifier)
+        self.assertEqual(page.selected_paths(), (packages[0], packages[2]))
+        click(2)
+        page.render()
+        click(1, Qt.KeyboardModifier.ShiftModifier)
+        self.assertEqual(page.selected_paths(), (packages[1], packages[2]))
 
     def test_new_registered_module_uses_existing_window(self):
         registry = builtins()

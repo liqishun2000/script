@@ -27,6 +27,11 @@ delivery step; the source tree does not contain the runtime binaries.
 - Shared device selection, background FIFO tasks, step-boundary cancellation, bounded log rendering,
   log export, task history and settings. A queued task captures its device, inputs and tools at submission.
 
+On the install page, click a row to select one package, use Ctrl for multiple packages or Shift for a
+range, then click **安装选中项（N）**. **安装全部（N）** submits every file in the list.
+The file count shows the total and selected counts. **重试失败项** retries all failed files in the list,
+regardless of the current selection. Installation actions stay disabled while the submitted job is pending.
+
 Task cancellation stops subsequent steps. The current command finishes or times out (10 minutes by
 default; device queries and emulator shutdown use shorter limits). Completed changes are not rolled back.
 Interrupted jobs are recorded after restart but never automatically replayed. A failed or cancelled GPCheck

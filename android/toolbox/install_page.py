@@ -1,7 +1,10 @@
 from pathlib import Path
 
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QCheckBox, QHBoxLayout, QLabel, QFileDialog, QStyle
+from PySide6.QtCore import QItemSelectionModel, QSignalBlocker, Qt
+from PySide6.QtWidgets import (
+    QAbstractItemView, QBoxLayout, QCheckBox, QFileDialog, QHBoxLayout, QLabel,
+    QLayout, QSizePolicy, QStyle, QWidget,
+)
 
 from . import operations
 from .services import Tools
@@ -15,17 +18,22 @@ class InstallPage(Page):
         self.results = {}
         self.pending = set()
         self.pending_paths = {}
+        self.adb_available = False
         self.setAcceptDrops(True)
         toolbar = QHBoxLayout()
         toolbar.addWidget(button("添加安装包", self.browse, QStyle.StandardPixmap.SP_FileIcon))
         toolbar.addWidget(icon_button("移除选中文件", self.remove, QStyle.StandardPixmap.SP_TrashIcon))
         toolbar.addWidget(icon_button("清空文件列表", self.clear, QStyle.StandardPixmap.SP_DialogResetButton))
         toolbar.addStretch()
-        self.count = QLabel("0 个文件")
+        self.count = QLabel()
+        self.count.setWordWrap(True)
+        self.count.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         toolbar.addWidget(self.count)
         self.layout.addLayout(toolbar)
         self.files = table(["安装包", "大小", "状态"])
         self.files.empty.setText("暂无安装包")
+        self.files.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.files.setToolTip("单击选中一个安装包；Ctrl 多选，Shift 连选。")
         self.files.horizontalHeader().resizeSection(0, 420)
         self.layout.addWidget(self.files, 1)
         options = QHBoxLayout()
@@ -35,20 +43,62 @@ class InstallPage(Page):
         options.addWidget(self.downgrade)
         options.addStretch()
         self.layout.addLayout(options)
-        actions = QHBoxLayout()
-        self.start = button("开始安装", lambda: self.guard(self.submit),
+        self.action_bar = QWidget()
+        self.action_bar.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.actions = QBoxLayout(QBoxLayout.Direction.LeftToRight, self.action_bar)
+        self.actions.setContentsMargins(0, 0, 0, 0)
+        self.actions.setSizeConstraint(QLayout.SizeConstraint.SetNoConstraint)
+        self.start = button("安装选中项（0）", lambda: self.guard(self.submit),
                             QStyle.StandardPixmap.SP_MediaPlay, True)
-        self.retry = button("重试失败项", lambda: self.guard(lambda: self.submit(True)),
+        self.install_all = button("安装全部（0）", lambda: self.guard(lambda: self.submit("all")),
+                                  QStyle.StandardPixmap.SP_MediaPlay)
+        self.retry = button("重试失败项", lambda: self.guard(lambda: self.submit("failed")),
                             QStyle.StandardPixmap.SP_BrowserReload)
-        self.start.setEnabled(False)
-        self.retry.setEnabled(False)
-        actions.addWidget(self.start)
-        actions.addWidget(self.retry)
-        actions.addStretch()
-        self.layout.addLayout(actions)
+        self.start.setToolTip("只安装选中的安装包。")
+        self.install_all.setToolTip("安装列表中的全部安装包，不受当前选择范围影响。")
+        self.retry.setToolTip("重试列表中全部失败项，不受当前选择范围影响。")
+        self.actions.addWidget(self.start)
+        self.actions.addWidget(self.install_all)
+        self.actions.addWidget(self.retry)
+        self.actions.addStretch()
+        self.layout.addWidget(self.action_bar)
+        self.files.itemSelectionChanged.connect(self.update_actions)
         context.tasks.finished.connect(self.completed)
         context.tasks.changed.connect(self.update_progress)
-        context.tools.changed.connect(self.render)
+        context.tools.changed.connect(self.refresh_tools)
+        self.refresh_tools()
+
+    def selected_paths(self):
+        return tuple(Path(item.data(Qt.ItemDataRole.UserRole))
+                     for index in sorted(self.files.selectionModel().selectedRows(), key=lambda index: index.row())
+                     if (item := self.files.item(index.row(), 0)) is not None)
+
+    def refresh_tools(self):
+        self.adb_available = Tools.available(self.context.tools.snapshot(), "adb")
+        self.update_actions()
+
+    def update_actions(self):
+        selected, total = len(self.selected_paths()), len(self.paths)
+        self.count.setText(f"共 {total} 个文件 · 已选 {selected} 个")
+        self.start.setText(f"安装选中项（{selected}）")
+        self.install_all.setText(f"安装全部（{total}）")
+        ready = self.adb_available and not self.pending
+        self.start.setEnabled(bool(selected) and ready)
+        self.install_all.setEnabled(bool(total) and ready)
+        self.retry.setEnabled(any(self.results.get(str(path), {}).get("status") == "failed"
+                                  for path in self.paths) and ready)
+        self.fit_actions()
+
+    def fit_actions(self):
+        buttons = (self.start, self.install_all, self.retry)
+        width = sum(control.minimumSizeHint().width() for control in buttons) + self.actions.spacing() * 2
+        self.actions.setDirection(QBoxLayout.Direction.TopToBottom if width > self.width()
+                                  else QBoxLayout.Direction.LeftToRight)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, "retry"):
+            self.fit_actions()
 
     def browse(self):
         paths, _ = QFileDialog.getOpenFileNames(
@@ -70,28 +120,38 @@ class InstallPage(Page):
             self.notify("未添加：" + "、".join(invalid), True)
 
     def render(self):
-        selected = {self.files.item(index.row(), 0).toolTip()
-                    for index in self.files.selectionModel().selectedRows()}
+        selected = set(self.selected_paths())
+        current = self.files.item(self.files.currentRow(), 0)
+        current_path = current.data(Qt.ItemDataRole.UserRole) if current else None
+        vertical, horizontal = self.files.verticalScrollBar().value(), self.files.horizontalScrollBar().value()
         rows = []
         for path in self.paths:
             size = f"{path.stat().st_size / 1024 / 1024:.1f} MB" if path.is_file() else "文件不存在"
             status = self.results.get(str(path), {}).get("status", "")
             rows.append((path.name, size, STATUS.get(status, "待安装")))
-        set_rows(self.files, rows)
-        for row, path in enumerate(self.paths):
-            self.files.item(row, 0).setToolTip(str(path))
-            self.files.item(row, 2).setToolTip(self.results.get(str(path), {}).get("detail", ""))
-            if str(path) in selected:
-                self.files.selectRow(row)
-        self.count.setText(f"{len(self.paths)} 个文件")
-        ready = Tools.available(self.context.tools.snapshot(), "adb") and not self.pending
-        self.start.setEnabled(bool(self.paths) and ready)
-        self.retry.setEnabled(any(self.results.get(str(path), {}).get("status") == "failed"
-                                  for path in self.paths) and ready)
+        with QSignalBlocker(self.files):
+            self.files.clearSelection()
+            set_rows(self.files, rows)
+            selection = self.files.selectionModel()
+            current_row = -1
+            for row, path in enumerate(self.paths):
+                self.files.item(row, 0).setData(Qt.ItemDataRole.UserRole, str(path))
+                self.files.item(row, 0).setToolTip(str(path))
+                self.files.item(row, 2).setToolTip(self.results.get(str(path), {}).get("detail", ""))
+                if str(path) == current_path:
+                    current_row = row
+                if path in selected:
+                    selection.select(self.files.model().index(row, 0),
+                                     QItemSelectionModel.SelectionFlag.Select | QItemSelectionModel.SelectionFlag.Rows)
+            selection.setCurrentIndex(self.files.model().index(current_row, 0),
+                                      QItemSelectionModel.SelectionFlag.NoUpdate)
+        self.files.verticalScrollBar().setValue(vertical)
+        self.files.horizontalScrollBar().setValue(horizontal)
+        self.update_actions()
 
     def remove(self):
-        selected = {index.row() for index in self.files.selectionModel().selectedRows()}
-        self.paths = [path for i, path in enumerate(self.paths) if i not in selected]
+        selected = set(self.selected_paths())
+        self.paths = [path for path in self.paths if path not in selected]
         self.render()
 
     def clear(self):
@@ -99,11 +159,22 @@ class InstallPage(Page):
         self.results.clear()
         self.render()
 
-    def submit(self, retry=False):
-        paths = tuple(path for path in self.paths if not retry or
-                      self.results.get(str(path), {}).get("status") == "failed")
+    def submit(self, scope="selected"):
+        if self.pending:
+            raise ValueError("当前安装任务尚未结束。")
+        if scope == "selected":
+            paths = self.selected_paths()
+            empty_message = "请先选中要安装的安装包。"
+        elif scope == "all":
+            paths = tuple(self.paths)
+            empty_message = "请添加安装包。"
+        elif scope == "failed":
+            paths = tuple(path for path in self.paths if self.results.get(str(path), {}).get("status") == "failed")
+            empty_message = "没有可重试的失败项。"
+        else:
+            raise ValueError("未知安装范围。")
         if not paths:
-            raise ValueError("请添加安装包。")
+            raise ValueError(empty_message)
         target = self.context.target()
         tools = self.context.tools.snapshot()
         Tools.require(tools, "adb")
@@ -116,15 +187,17 @@ class InstallPage(Page):
         for path in paths:
             self.results[str(path)] = {"status": "queued", "detail": ""}
         self.render()
-        self.notify("安装任务已提交：" + target)
+        self.notify(f"已提交 {len(paths)} 个安装包 · {target}")
 
     def update_progress(self):
         previous = {key: dict(value) for key, value in self.results.items()}
         for task in self.context.tasks.tasks:
             if task.id not in self.pending:
                 continue
+            task_paths = {str(path) for path in self.pending_paths[task.id]}
             for item in task.outcome.items if task.outcome else []:
-                self.results[item["name"]] = item
+                if item["name"] in task_paths:
+                    self.results[item["name"]] = item
             if task.status in {"running", "stopping"}:
                 waiting = [str(path) for path in self.pending_paths[task.id]
                            if self.results.get(str(path), {}).get("status") in {"queued", "running"}]
@@ -137,11 +210,14 @@ class InstallPage(Page):
         if task.id not in self.pending:
             return
         self.pending.remove(task.id)
-        self.pending_paths.pop(task.id, None)
+        paths = self.pending_paths.pop(task.id)
+        task_paths = {str(path) for path in paths}
         for item in task.outcome.items if task.outcome else []:
-            self.results[item["name"]] = item
-        for result in self.results.values():
-            if result["status"] in {"queued", "running"}:
+            if item["name"] in task_paths:
+                self.results[item["name"]] = item
+        for path in paths:
+            result = self.results.get(str(path), {})
+            if result.get("status") in {"queued", "running"}:
                 result.update(status=task.status, detail=task.message)
         self.render()
         self.notify(STATUS[task.status] + ("：" + task.message if task.message else ""),
